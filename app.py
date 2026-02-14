@@ -35,199 +35,357 @@ st.set_page_config(
 st.markdown("""
 <style>
 /* ══════════════════════════════════════════════════════════
-   SECOP Análisis del Sector — Professional Theme
-   WCAG AA compliant contrast ratios throughout
+   SECOP Análisis del Sector — Dark Professional Theme
+   Inspired by modern SaaS dashboards
    ══════════════════════════════════════════════════════════ */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
 html, body, [class*="css"] {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
-/* ── Eliminar decoración default de Streamlit ── */
+/* ── Fondo oscuro global ── */
+.stApp, .main {
+    background-color: #0d1117 !important;
+}
 header[data-testid="stHeader"] { background: transparent !important; }
-.block-container { padding-top: 1rem !important; }
+.block-container { padding-top: 0.5rem !important; max-width: 1200px; }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   HEADER PRINCIPAL
+   HERO SECTION — Gradiente profundo
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .main-header {
-    background: linear-gradient(135deg, #0f2b46 0%, #1a3f6b 50%, #1e5299 100%);
-    padding: 2.2rem 2.8rem;
-    border-radius: 14px;
+    background: linear-gradient(135deg, #050d1a 0%, #0a1628 20%, #0f2847 45%, #162f5a 65%, #1e3a6e 80%, #2a4a82 100%);
+    padding: 3rem 3.5rem 2.5rem 3.5rem;
+    border-radius: 18px;
     margin-bottom: 1.8rem;
     color: #ffffff;
-    box-shadow: 0 8px 32px rgba(15,43,70,0.35);
+    box-shadow: 0 12px 48px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.05);
     position: relative;
     overflow: hidden;
 }
 .main-header::before {
     content: '';
-    position: absolute; top: 0; right: 0;
-    width: 200px; height: 100%;
-    background: radial-gradient(circle at 80% 40%, rgba(255,255,255,0.06) 0%, transparent 60%);
+    position: absolute; top: -50%; right: -20%;
+    width: 500px; height: 500px;
+    background: radial-gradient(circle, rgba(99,102,241,0.12) 0%, rgba(59,130,246,0.06) 40%, transparent 70%);
+    pointer-events: none;
+}
+.main-header::after {
+    content: '';
+    position: absolute; bottom: -30%; left: 10%;
+    width: 400px; height: 400px;
+    background: radial-gradient(circle, rgba(6,182,212,0.08) 0%, transparent 60%);
+    pointer-events: none;
+}
+.hero-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(16,185,129,0.12);
+    border: 1px solid rgba(16,185,129,0.25);
+    padding: 0.35rem 1rem;
+    border-radius: 20px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: #34d399;
+    margin-bottom: 1rem;
+}
+.hero-badge::before {
+    content: '';
+    width: 7px; height: 7px;
+    background: #10b981;
+    border-radius: 50%;
+    box-shadow: 0 0 6px rgba(16,185,129,0.5);
 }
 .main-header h1 {
-    margin: 0; font-size: 1.9rem; font-weight: 800;
-    letter-spacing: -0.5px; color: #ffffff;
-    text-shadow: 0 1px 3px rgba(0,0,0,0.15);
+    margin: 0; font-size: 2.6rem; font-weight: 900;
+    letter-spacing: -1px; color: #ffffff;
+    line-height: 1.1;
+    text-shadow: 0 2px 10px rgba(0,0,0,0.3);
 }
-.main-header p {
-    margin: 0.5rem 0 0 0; font-size: 0.88rem;
-    color: #c8ddf0; font-weight: 400;
+.hero-line {
+    width: 60px; height: 3px;
+    background: linear-gradient(90deg, #3b82f6, #6366f1);
+    border-radius: 2px;
+    margin: 1rem 0;
+}
+.main-header .hero-desc {
+    margin: 0; font-size: 0.92rem;
+    color: #94a3b8; font-weight: 400;
+    max-width: 600px; line-height: 1.5;
+}
+.hero-stats {
+    display: flex; gap: 2.5rem;
+    margin-top: 1.5rem;
+    padding-top: 1.2rem;
+    border-top: 1px solid rgba(255,255,255,0.06);
+}
+.hero-stat .hs-value {
+    font-size: 1.4rem; font-weight: 800;
+    color: #ffffff;
+}
+.hero-stat .hs-label {
+    font-size: 0.62rem; font-weight: 600;
+    color: #64748b; text-transform: uppercase;
+    letter-spacing: 0.8px; margin-top: 2px;
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   TARJETAS DE MÉTRICAS — Alto contraste
+   FEATURE CARDS — Con línea gradiente superior
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+.feature-cards {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+.feature-card {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 14px;
+    padding: 1.5rem 1.2rem;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+}
+.feature-card::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0;
+    height: 3px;
+}
+.feature-card:nth-child(1)::before { background: linear-gradient(90deg, #3b82f6, #6366f1); }
+.feature-card:nth-child(2)::before { background: linear-gradient(90deg, #f43f5e, #ec4899); }
+.feature-card:nth-child(3)::before { background: linear-gradient(90deg, #10b981, #06b6d4); }
+.feature-card:nth-child(4)::before { background: linear-gradient(90deg, #f59e0b, #ef4444); }
+.feature-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+    border-color: #30363d;
+}
+.feature-card .fc-icon {
+    width: 48px; height: 48px;
+    border-radius: 12px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 1.4rem;
+    margin-bottom: 0.7rem;
+}
+.feature-card:nth-child(1) .fc-icon { background: rgba(59,130,246,0.12); }
+.feature-card:nth-child(2) .fc-icon { background: rgba(244,63,94,0.12); }
+.feature-card:nth-child(3) .fc-icon { background: rgba(16,185,129,0.12); }
+.feature-card:nth-child(4) .fc-icon { background: rgba(245,158,11,0.12); }
+.feature-card .fc-title {
+    font-size: 0.82rem; font-weight: 700; color: #e2e8f0;
+    margin-bottom: 0.3rem;
+}
+.feature-card .fc-desc {
+    font-size: 0.7rem; color: #64748b;
+    line-height: 1.4;
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   TARJETAS DE MÉTRICAS — Tema oscuro
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .metric-card {
-    background: #ffffff;
-    border: 1px solid #e1e5eb;
-    border-radius: 12px;
-    padding: 1.3rem 1rem;
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 14px;
+    padding: 1.4rem 1rem;
     text-align: center;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
-    border-top: 3px solid #1a3f6b;
+    transition: transform 0.25s ease, box-shadow 0.25s ease;
+    position: relative;
+    overflow: hidden;
+}
+.metric-card::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #3b82f6, #6366f1);
 }
 .metric-card:hover {
     transform: translateY(-3px);
-    box-shadow: 0 6px 24px rgba(0,0,0,0.1);
+    box-shadow: 0 8px 30px rgba(0,0,0,0.4);
 }
 .metric-card .metric-icon {
-    font-size: 1.5rem; margin-bottom: 0.3rem;
+    font-size: 1.5rem; margin-bottom: 0.4rem;
 }
 .metric-card .metric-value {
-    font-size: 1.65rem; font-weight: 800; color: #0f2b46;
+    font-size: 1.7rem; font-weight: 800; color: #f0f6fc;
     margin: 0.25rem 0; line-height: 1.2;
 }
 .metric-card .metric-label {
-    font-size: 0.72rem; color: #4a5568; text-transform: uppercase;
-    letter-spacing: 0.6px; font-weight: 600;
+    font-size: 0.68rem; color: #8b949e; text-transform: uppercase;
+    letter-spacing: 0.7px; font-weight: 600;
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   SIDEBAR — Fondo blanco, máximo contraste
+   SIDEBAR — Tema oscuro profesional
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 section[data-testid="stSidebar"] {
-    background: #ffffff !important;
-    border-right: 1px solid #e2e8f0 !important;
+    background: #0d1117 !important;
+    border-right: 1px solid #21262d !important;
 }
 section[data-testid="stSidebar"] > div {
     padding-top: 0.5rem;
 }
+section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] .stMarkdown p,
+section[data-testid="stSidebar"] span {
+    color: #c9d1d9 !important;
+}
+section[data-testid="stSidebar"] .stSelectbox > div > div,
+section[data-testid="stSidebar"] .stMultiSelect > div > div {
+    background: #161b22 !important;
+    border-color: #30363d !important;
+    color: #c9d1d9 !important;
+}
+section[data-testid="stSidebar"] .stSlider > div > div > div {
+    color: #c9d1d9 !important;
+}
 
-/* Sidebar title & panel header */
+/* Sidebar brand */
 .sidebar-brand {
-    background: #0f2b46;
+    background: linear-gradient(135deg, #0a1628, #162f5a);
     margin: -1rem -1rem 1.2rem -1rem;
-    padding: 1.4rem 1.2rem;
-    border-radius: 0 0 12px 12px;
+    padding: 1.6rem 1.2rem;
+    border-radius: 0 0 14px 14px;
     text-align: center;
+    border-bottom: 1px solid rgba(59,130,246,0.15);
 }
 .sidebar-brand h3 {
-    color: #ffffff; margin: 0; font-size: 1rem;
-    font-weight: 700; letter-spacing: 0.3px;
+    color: #f0f6fc; margin: 0; font-size: 1.05rem;
+    font-weight: 800; letter-spacing: 0.3px;
 }
 .sidebar-brand p {
-    color: #a0bdd5; margin: 0.3rem 0 0 0;
+    color: #64748b; margin: 0.4rem 0 0 0;
     font-size: 0.72rem; font-weight: 400;
 }
 
 /* Section labels in sidebar */
 .filter-label {
-    font-size: 0.78rem; font-weight: 700; color: #1a202c;
+    font-size: 0.78rem; font-weight: 700; color: #c9d1d9;
     margin: 0.8rem 0 0.3rem 0; padding: 0;
     display: flex; align-items: center; gap: 0.4rem;
 }
 .filter-label .fl-icon {
     display: inline-flex; align-items: center;
-    justify-content: center; width: 22px; height: 22px;
-    background: #edf2f7; border-radius: 6px; font-size: 0.7rem;
+    justify-content: center; width: 24px; height: 24px;
+    background: rgba(59,130,246,0.1); border-radius: 7px; font-size: 0.7rem;
 }
 
 /* Sidebar divider */
 .sidebar-divider {
-    height: 1px; background: #e2e8f0;
+    height: 1px; background: #21262d;
     margin: 1rem 0; border: none;
 }
 
 /* DB counter card in sidebar */
 .db-counter {
-    text-align: center; padding: 1rem;
-    background: #0f2b46; border-radius: 10px;
+    text-align: center; padding: 1.1rem;
+    background: linear-gradient(135deg, #0a1628, #162f5a);
+    border-radius: 12px;
     margin-top: 0.5rem;
+    border: 1px solid rgba(59,130,246,0.12);
 }
 .db-counter .db-label {
-    color: #a0bdd5; font-size: 0.7rem;
-    text-transform: uppercase; font-weight: 600;
-    letter-spacing: 0.8px;
+    color: #64748b; font-size: 0.68rem;
+    text-transform: uppercase; font-weight: 700;
+    letter-spacing: 1px;
 }
 .db-counter .db-value {
-    color: #ffffff; font-size: 1.5rem;
-    font-weight: 800; margin: 0.2rem 0;
+    color: #f0f6fc; font-size: 1.6rem;
+    font-weight: 900; margin: 0.2rem 0;
 }
 .db-counter .db-sub {
-    color: #7ea8c9; font-size: 0.68rem; font-weight: 400;
+    color: #475569; font-size: 0.68rem; font-weight: 400;
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   BARRA DE BÚSQUEDA
+   BARRA DE BÚSQUEDA — Tema oscuro
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .search-container {
-    background: #f7f9fc;
-    border: 2px solid #d5dce6;
-    border-radius: 12px;
-    padding: 1rem 1.3rem;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 14px;
+    padding: 1.1rem 1.4rem;
     margin-bottom: 1.2rem;
     transition: border-color 0.3s, box-shadow 0.3s;
 }
 .search-container:focus-within {
-    border-color: #1a3f6b;
-    box-shadow: 0 0 0 3px rgba(26,63,107,0.1);
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59,130,246,0.12);
 }
 .search-hint {
-    font-size: 0.78rem; color: #4a5568;
+    font-size: 0.78rem; color: #8b949e;
     margin-top: 0.4rem;
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   TABLA DE DATOS
+   INPUTS globales — Tema oscuro
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-[data-testid="stDataFrame"] {
-    border-radius: 10px;
-    overflow: hidden;
-    box-shadow: 0 2px 16px rgba(0,0,0,0.06);
-    border: 1px solid #e2e8f0;
+.stTextInput > div > div > input {
+    background: #0d1117 !important;
+    border-color: #30363d !important;
+    color: #c9d1d9 !important;
+    border-radius: 10px !important;
+}
+.stTextInput > div > div > input::placeholder {
+    color: #484f58 !important;
+}
+.stTextInput > div > div > input:focus {
+    border-color: #3b82f6 !important;
+    box-shadow: 0 0 0 3px rgba(59,130,246,0.12) !important;
 }
 
-/* Tabs */
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   TABLA DE DATOS — Tema oscuro
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+[data-testid="stDataFrame"] {
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    border: 1px solid #21262d;
+}
+
+/* Tabs — Tema oscuro */
 button[data-baseweb="tab"] {
     font-weight: 600 !important;
     font-size: 0.88rem !important;
+    color: #8b949e !important;
+}
+button[data-baseweb="tab"][aria-selected="true"] {
+    color: #f0f6fc !important;
+}
+div[data-baseweb="tab-list"] {
+    background: #161b22 !important;
+    border-radius: 10px;
+    padding: 4px;
+    border: 1px solid #21262d;
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   ANÁLISIS HEADER
+   ANÁLISIS HEADER — Tema oscuro
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .analisis-header {
-    background: linear-gradient(135deg, #0f2b46 0%, #1a3f6b 100%);
+    background: linear-gradient(135deg, #050d1a 0%, #0f2847 50%, #1e3a6e 100%);
     color: #ffffff;
-    padding: 1.3rem 2rem;
-    border-radius: 12px;
+    padding: 1.5rem 2.2rem;
+    border-radius: 14px;
     margin: 1rem 0;
-    box-shadow: 0 4px 16px rgba(15,43,70,0.25);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    border: 1px solid rgba(59,130,246,0.1);
 }
 .analisis-header h2 {
-    margin: 0; font-size: 1.25rem; font-weight: 700;
+    margin: 0; font-size: 1.3rem; font-weight: 800;
     color: #ffffff;
 }
 .analisis-header p {
-    color: #c8ddf0;
+    color: #94a3b8;
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   ESTADÍSTICOS
+   ESTADÍSTICOS — Tema oscuro
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .stats-grid {
     display: grid;
@@ -236,139 +394,162 @@ button[data-baseweb="tab"] {
     margin: 1rem 0 1.5rem 0;
 }
 .stat-card {
-    background: #f7f9fc;
-    border: 1px solid #e1e5eb;
-    border-radius: 10px;
-    padding: 1rem 1.2rem;
-    border-left: 4px solid #1a3f6b;
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 12px;
+    padding: 1.1rem 1.2rem;
+    border-left: 3px solid #3b82f6;
+    transition: border-color 0.2s, transform 0.2s;
+}
+.stat-card:hover {
+    border-left-color: #6366f1;
+    transform: translateX(2px);
 }
 .stat-card .stat-title {
-    font-size: 0.68rem; font-weight: 700;
-    color: #4a5568; text-transform: uppercase;
-    letter-spacing: 0.5px; margin-bottom: 0.3rem;
+    font-size: 0.65rem; font-weight: 700;
+    color: #8b949e; text-transform: uppercase;
+    letter-spacing: 0.6px; margin-bottom: 0.3rem;
 }
 .stat-card .stat-value {
     font-size: 1.25rem; font-weight: 800;
-    color: #0f2b46; margin-bottom: 0.15rem;
+    color: #f0f6fc; margin-bottom: 0.15rem;
 }
 .stat-card .stat-sub {
-    font-size: 0.7rem; color: #718096;
+    font-size: 0.68rem; color: #484f58;
 }
 .stats-section-title {
-    font-size: 0.9rem; font-weight: 700; color: #0f2b46;
+    font-size: 0.9rem; font-weight: 700; color: #c9d1d9;
     margin: 1.2rem 0 0.6rem 0;
     display: flex; align-items: center; gap: 0.5rem;
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   FICHAS DE CONTRATO — Alto contraste
+   FICHAS DE CONTRATO — Tema oscuro
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .contract-card {
-    background: #ffffff;
-    border: 1px solid #d5dce6;
-    border-radius: 10px;
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 14px;
     padding: 0;
     margin: 1.2rem 0;
     overflow: hidden;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.06);
-    transition: box-shadow 0.2s;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+    transition: box-shadow 0.2s, border-color 0.2s;
 }
 .contract-card:hover {
-    box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+    border-color: #30363d;
 }
 .contract-card-header {
-    background: #0f2b46;
-    color: #ffffff;
-    padding: 0.7rem 1.3rem;
+    background: linear-gradient(135deg, #0a1628, #162f5a);
+    color: #f0f6fc;
+    padding: 0.8rem 1.4rem;
     font-weight: 700;
     font-size: 0.82rem;
     letter-spacing: 0.5px;
+    border-bottom: 1px solid rgba(59,130,246,0.12);
 }
 .contract-card table {
     width: 100%; border-collapse: collapse;
 }
 .contract-card table td {
-    padding: 0.55rem 1rem;
+    padding: 0.6rem 1.1rem;
     font-size: 0.8rem;
-    color: #1a202c;
-    border-bottom: 1px solid #edf2f7;
+    color: #c9d1d9;
+    border-bottom: 1px solid #21262d;
     vertical-align: top;
     line-height: 1.4;
 }
 .contract-card table td:first-child {
     width: 170px;
     font-weight: 700;
-    color: #0f2b46;
-    background: #f0f4f8;
-    border-right: 2px solid #d5dce6;
-    font-size: 0.72rem;
+    color: #8b949e;
+    background: rgba(13,17,23,0.5);
+    border-right: 1px solid #21262d;
+    font-size: 0.7rem;
     text-transform: uppercase;
-    letter-spacing: 0.3px;
+    letter-spacing: 0.4px;
 }
 .contract-card table tr:last-child td {
     border-bottom: none;
 }
 .contract-card table tr:hover td {
-    background: #fafbfd;
+    background: rgba(59,130,246,0.03);
 }
 .contract-card table tr:hover td:first-child {
-    background: #e8eef4;
+    background: rgba(59,130,246,0.06);
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   BOTONES DE DESCARGA
+   BOTONES DE DESCARGA — Tema oscuro
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .stDownloadButton > button {
-    background: #0f2b46 !important;
+    background: linear-gradient(135deg, #1e3a6e, #3b82f6) !important;
     color: #ffffff !important;
     border: none !important;
-    border-radius: 8px !important;
+    border-radius: 10px !important;
     padding: 0.65rem 1.6rem !important;
     font-weight: 700 !important;
     font-size: 0.82rem !important;
     transition: all 0.25s ease !important;
-    box-shadow: 0 2px 8px rgba(15,43,70,0.25) !important;
+    box-shadow: 0 4px 14px rgba(59,130,246,0.3) !important;
     letter-spacing: 0.2px !important;
 }
 .stDownloadButton > button:hover {
-    background: #1a3f6b !important;
+    background: linear-gradient(135deg, #2a4a82, #6366f1) !important;
     transform: translateY(-2px) !important;
-    box-shadow: 0 6px 20px rgba(15,43,70,0.35) !important;
+    box-shadow: 0 8px 24px rgba(59,130,246,0.4) !important;
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   UTILIDADES
+   UTILIDADES — Tema oscuro
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .custom-divider {
-    height: 2px;
-    background: linear-gradient(90deg, #0f2b46 0%, #1a3f6b 30%, transparent 100%);
+    height: 1px;
+    background: linear-gradient(90deg, #3b82f6 0%, #6366f1 30%, transparent 100%);
     margin: 1.8rem 0;
     border: none;
 }
 
-/* Empty state */
+/* Empty state — Tema oscuro */
 .empty-state {
     text-align: center; padding: 3.5rem 2rem;
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 14px;
 }
 .empty-state .es-icon {
     font-size: 2.8rem; margin-bottom: 0.5rem;
 }
 .empty-state .es-title {
-    font-size: 1.05rem; font-weight: 600; color: #2d3748;
+    font-size: 1.05rem; font-weight: 600; color: #c9d1d9;
     margin: 0.3rem 0;
 }
 .empty-state .es-desc {
-    font-size: 0.82rem; color: #718096;
+    font-size: 0.82rem; color: #8b949e;
 }
+
+/* Markdown text colors */
+.stMarkdown, .stMarkdown p, .stMarkdown li {
+    color: #c9d1d9 !important;
+}
+.stMarkdown a { color: #58a6ff !important; }
 
 /* Success count pill */
 .result-pill {
     display: inline-block;
-    background: #e6f4ea; color: #1a7431;
+    background: rgba(16,185,129,0.12); color: #34d399;
+    border: 1px solid rgba(16,185,129,0.2);
     padding: 0.3rem 1rem; border-radius: 20px;
     font-size: 0.78rem; font-weight: 600;
     margin-bottom: 0.8rem;
 }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-track { background: #0d1117; }
+::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #484f58; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -818,14 +999,64 @@ def _generar_informe_pdf(contratos: pd.DataFrame, palabras_busqueda: str = "") -
 # ────────────────────────────────────────────────────────────
 
 # ── Header principal ──
-st.markdown("""
+df = cargar_datos()
+
+n_total = len(df)
+n_entidades_hero = df["nombre_entidad"].nunique()
+n_modalidades_hero = df["modalidad_de_contratacion"].nunique()
+
+st.markdown(f"""
 <div class="main-header">
-    <h1>📊 Análisis del Sector — SECOP</h1>
-    <p>Departamento de Santander &nbsp;·&nbsp; Todas las modalidades &nbsp;·&nbsp; Contratos celebrados</p>
+    <div class="hero-badge">CONTRATACIÓN PÚBLICA</div>
+    <h1>ANÁLISIS DEL SECTOR<br>SECOP COLOMBIA</h1>
+    <div class="hero-line"></div>
+    <p class="hero-desc">Herramienta para el análisis automatizado de contratación pública del departamento de Santander</p>
+    <div class="hero-stats">
+        <div class="hero-stat">
+            <div class="hs-value">{n_total:,}</div>
+            <div class="hs-label">Contratos</div>
+        </div>
+        <div class="hero-stat">
+            <div class="hs-value">{n_entidades_hero}</div>
+            <div class="hs-label">Entidades</div>
+        </div>
+        <div class="hero-stat">
+            <div class="hs-value">{n_modalidades_hero}</div>
+            <div class="hs-label">Modalidades</div>
+        </div>
+        <div class="hero-stat">
+            <div class="hs-value">3</div>
+            <div class="hs-label">Formatos Export</div>
+        </div>
+    </div>
 </div>
 """, unsafe_allow_html=True)
 
-df = cargar_datos()
+# ── Feature Cards ──
+st.markdown("""
+<div class="feature-cards">
+    <div class="feature-card">
+        <div class="fc-icon">📊</div>
+        <div class="fc-title">Búsqueda Inteligente</div>
+        <div class="fc-desc">Busca contratos por palabras clave con filtros avanzados</div>
+    </div>
+    <div class="feature-card">
+        <div class="fc-icon">📋</div>
+        <div class="fc-title">Análisis de Demanda</div>
+        <div class="fc-desc">Genera informes formales automáticamente</div>
+    </div>
+    <div class="feature-card">
+        <div class="fc-icon">📄</div>
+        <div class="fc-title">Exportar PDF</div>
+        <div class="fc-desc">Descarga informes profesionales en PDF</div>
+    </div>
+    <div class="feature-card">
+        <div class="fc-icon">📈</div>
+        <div class="fc-title">Estadísticas</div>
+        <div class="fc-desc">Análisis estadístico detallado de contratos</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 # ── Barra de búsqueda ──
 st.markdown('<div class="search-container">', unsafe_allow_html=True)

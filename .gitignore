@@ -40,6 +40,7 @@ venv.bak/
 
 # Proyecto específico
 output/*.csv
+output/*.xlsx
 output/*.parquet
 logs/*.log
 logs/*.log.*
