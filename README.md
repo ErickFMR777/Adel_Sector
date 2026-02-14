@@ -1,4 +1,4 @@
-# A_del_Mercado — Pipeline de Scraping SECOP I
+# Adel_Sector — Pipeline de Scraping SECOP I
 
 Pipeline automatizado de extracción, parsing y limpieza de datos de contratación pública del portal **SECOP I** ([contratos.gov.co](https://www.contratos.gov.co)).
 
@@ -38,7 +38,7 @@ CSV / Parquet (output/)
 ## Estructura del Proyecto
 
 ```
-A_del_Mercado/
+Adel_Sector/
 ├── config.py            # Constantes, selectores, logging, SearchParams
 ├── exceptions.py        # Excepciones personalizadas del pipeline
 ├── scraper.py           # Automatización Selenium (formulario, iframe, paginación)
@@ -56,8 +56,8 @@ A_del_Mercado/
 
 ```bash
 # Clonar el repositorio
-git clone https://github.com/ErickFMR777/A_del_Mercado.git
-cd A_del_Mercado
+git clone https://github.com/ErickFMR777/Adel_Sector.git
+cd Adel_Sector
 
 # Crear entorno virtual (recomendado)
 python -m venv .venv
