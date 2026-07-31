@@ -122,7 +122,7 @@ Genera el **Estudio del Sector** con la estructura del apartado 5.2 de la *Guía
 
 - **`config.py` es la única fuente de verdad** de endpoints, nombres de parámetros, códigos, selectores, timeouts y `SearchParams`. Importar de ahí en vez de repetir literales.
 - **Separación estricta**: `scraper.py` devuelve HTML y nunca lo interpreta; `parser.py` estructura sin convertir tipos (`cuantia` sigue siendo `'$255.000.000,00'`); `cleaning.py` es el único que tipifica. Respetar esa frontera.
-- **Al añadir un código de modalidad** hay que tocar dos sitios: `config.MODALIDAD_SECOP1` (código → nombre en SECOP I) y `api_scraper.MODALIDAD_MAP` (código → nombre en SECOP II, que **son distintos**: `13` es "Contratación Mínima Cuantía" en SECOP I y "Mínima cuantía" en SECOP II). `_traducir_modalidad()` / `_traducir_departamento()` aceptan código, nombre de SECOP I o nombre de SECOP II, sin distinguir tildes ni mayúsculas: una diferencia de una letra devuelve cero registros sin ningún error visible, así que la resolución debe seguir siendo tolerante.
+- **Al añadir una modalidad, departamento o tipo de contrato** se toca un solo sitio: el catálogo. `api_scraper._traducir_*()` resuelve contra él y acepta código, nombre de SECOP I o nombre de SECOP II, sin distinguir tildes ni mayúsculas: una diferencia de una letra devuelve cero registros sin ningún error visible, así que la resolución debe seguir siendo tolerante.
 - **Errores**: jerarquía tipada en `exceptions.py`, todas con un dict `context` que se serializa en `__str__`. Lanzar la específica, no `Exception`.
 - **API Socrata**: se pagina con `$order=:id`. Ordenar por fecha produce empates y, al paginar por `$offset`, duplica y pierde filas. `contar_registros()` debe recibir **los mismos filtros** que `consultar_contratos()`, fechas incluidas, o el total no corresponde y la descarga se trunca.
 
@@ -150,4 +150,4 @@ Genera el **Estudio del Sector** con la estructura del apartado 5.2 de la *Guía
 ## Pendientes conocidos
 
 - `output/` y `logs/` se crean como efecto secundario de importar `config.py`; su contenido está ignorado por git.
-- `.github/copilot-instructions.md` es una plantilla sin rellenar; ignorarla.
+- `.github/workflows/verificar-fuentes.yml` ejecuta `verificar_fuentes.py --rapido` cada lunes; omite SECOP I porque el WAF bloquea las IP de los runners compartidos.

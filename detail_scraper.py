@@ -35,7 +35,6 @@ from config import (
     HTTP_DELAY,
     MAX_RETRIES,
     RETRY_BACKOFF,
-    SECOP_DETALLE_URL,
 )
 
 logger = logging.getLogger(__name__)

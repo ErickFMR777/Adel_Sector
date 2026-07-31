@@ -38,7 +38,6 @@ import sys
 import urllib.request
 
 from config import (
-    COLUMNAS_TABLA_SECOP1,
     DEPARTAMENTO_SECOP1,
     MODALIDAD_SECOP1,
     PARAM_FECHA_INICIAL,

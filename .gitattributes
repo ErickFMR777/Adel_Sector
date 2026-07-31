@@ -1,0 +1,18 @@
+# Normaliza los finales de línea: se guardan como LF en el repositorio y
+# git los adapta al sistema al hacer checkout. Sin esto, trabajar desde
+# Windows genera avisos constantes de "LF will be replaced by CRLF" y
+# diffs con el archivo entero cambiado.
+* text=auto eol=lf
+
+# Binarios: nunca tocar.
+*.pdf   binary
+*.xlsx  binary
+*.docx  binary
+*.parquet binary
+*.png   binary
+*.jpg   binary
+*.ttf   binary
+
+# Los CSV de salida se ignoran, pero si alguno se versiona conviene que
+# conserve su codificación tal cual (llevan BOM para Excel en español).
+*.csv   -text

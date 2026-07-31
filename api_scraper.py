@@ -47,7 +47,6 @@ from catalogos import (
 from config import (
     CSV_ENCODING,
     CSV_SEPARATOR,
-    DEPARTAMENTO_SECOP1,
     ESTADO_SECOP1,
     MAX_RETRIES,
     OUTPUT_DIR,
@@ -72,25 +71,10 @@ API_PAGE_SIZE = SOCRATA_PAGE_SIZE
 # ────────────────────────────────────────────────────────────
 # MAPEOS SECOP I → SECOP II
 # ────────────────────────────────────────────────────────────
-
-# Código de modalidad de SECOP I → texto de ``modalidad_de_contratacion``
-# en SECOP II. Solo se incluyen las equivalencias verificadas contra los
-# valores reales del dataset; los códigos sin equivalente claro se dejan
-# fuera a propósito para no filtrar por un valor inexistente.
-MODALIDAD_MAP: dict[str, str] = {
-    "1": "Licitación pública",
-    "21": "Licitación pública Obra Publica",
-    "11": "Selección Abreviada de Menor Cuantía",
-    "9": "Selección abreviada subasta inversa",
-    "13": "Mínima cuantía",
-    "15": "Concurso de méritos abierto",
-    "12": "Contratación directa",
-    "2": "Contratación Directa (con ofertas)",
-    "4": "Contratación régimen especial",
-}
-
-# Departamentos: se reutiliza el mapa oficial del portal de SECOP I.
-DEPARTAMENTO_MAP: dict[str, str] = dict(DEPARTAMENTO_SECOP1)
+#
+# Las equivalencias de departamento, modalidad y tipo de contrato viven
+# en ``catalogos.py``, que es la única fuente de verdad. Aquí solo queda
+# la expansión de estados, que no es una correspondencia uno a uno.
 
 # "Celebrado" en SECOP I equivale a contratos ya formalizados en SECOP II.
 ESTADO_CELEBRADO_EQUIVALENTES = [
@@ -154,11 +138,6 @@ def _fecha_iso(fecha: str, fin_del_dia: bool = False) -> Optional[str]:
     hora = "23:59:59" if fin_del_dia else "00:00:00"
     return f"{anio}-{mes.zfill(2)}-{dia.zfill(2)}T{hora}"
 
-
-def _norm(texto: str) -> str:
-    """Minúsculas, sin tildes y sin espacios redundantes, para comparar."""
-    tabla = str.maketrans("áéíóúüñÁÉÍÓÚÜÑ", "aeiouunAEIOUUN")
-    return " ".join(str(texto).translate(tabla).lower().split())
 
 
 def _traducir(catalogo, valor: str, concepto: str) -> Optional[str]:

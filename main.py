@@ -27,7 +27,6 @@ Uso:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from datetime import datetime
@@ -38,16 +37,11 @@ import pandas as pd
 from config import (
     CSV_ENCODING,
     CSV_SEPARATOR,
-    LOG_DIR,
     OUTPUT_DIR,
     SearchParams,
     setup_logging,
 )
-from exceptions import (
-    SecopEmptyTableError,
-    SecopError,
-    SecopRecaptchaError,
-)
+from exceptions import SecopError
 
 logger = logging.getLogger(__name__)
 

@@ -1,0 +1,49 @@
+# Chequeo periódico de las fuentes de SECOP.
+#
+# El riesgo de un scraper no es que falle con estrépito — eso se nota —
+# sino que siga corriendo y devuelva datos vacíos o sin filtrar porque el
+# portal renombró un campo. Este flujo convierte ese fallo silencioso en
+# una notificación.
+#
+# Solo se ejecuta la parte de SECOP II y catálogos: el portal de SECOP I
+# está tras un WAF que bloquea las IP de los runners compartidos.
+
+name: Verificar fuentes SECOP
+
+on:
+  schedule:
+    # Lunes a las 07:00 UTC (02:00 en Colombia).
+    - cron: "0 7 * * 1"
+  workflow_dispatch:        # permite lanzarlo a mano desde la pestaña Actions
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        # Basta con lo necesario para consultar la API y parsear.
+        run: pip install requests pandas beautifulsoup4
+
+      - name: Verificar SECOP II y catálogos
+        env:
+          # Un app token de Socrata evita el throttling. Configúralo en
+          # Settings → Secrets and variables → Actions (opcional).
+          SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
+        run: python verificar_fuentes.py --rapido
+
+      - name: Avisar si algo cambió
+        if: failure()
+        run: |
+          echo "::error::Una fuente de SECOP cambió o un valor del"
+          echo "::error::catálogo dejó de existir. Revisa el log:"
+          echo "::error::los filtros pueden estar devolviendo cero"
+          echo "::error::registros en silencio."

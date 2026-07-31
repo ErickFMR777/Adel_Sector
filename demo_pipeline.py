@@ -12,7 +12,6 @@ Simula cada etapa del pipeline con datos realistas:
 
 import logging
 import sys
-from pathlib import Path
 
 import pandas as pd
 
