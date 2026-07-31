@@ -5,6 +5,7 @@ Jerarquía:
   SecopError (base)
   ├── SecopTimeoutError      → Timeout de Selenium / carga de página.
   ├── SecopRecaptchaError    → reCAPTCHA detectado en el portal.
+  ├── SecopBlockedError      → El WAF del portal bloqueó la IP (403).
   ├── SecopIframeError       → No se pudo acceder al iframe de resultados.
   ├── SecopEmptyTableError   → La consulta no retornó registros.
   ├── SecopFormError         → Error al interactuar con el formulario.
@@ -56,6 +57,18 @@ class SecopRecaptchaError(SecopError):
 
     Indica que se debe pausar y permitir resolución manual o integrar
     un servicio externo de resolución de CAPTCHA.
+    """
+
+
+class SecopBlockedError(SecopError):
+    """El WAF de contratos.gov.co bloqueó la petición (HTTP 403).
+
+    El portal está detrás de Zenedge/Imperva, que corta el tráfico ante
+    ráfagas de peticiones y devuelve una página
+    *"Access to the website is blocked"*.
+
+    No es un error de programación: indica que hay que bajar el ritmo
+    (``SECOP_DELAY``) o esperar a que expire el bloqueo de IP.
     """
 
 

@@ -7,8 +7,9 @@ filtrar por ciudad/tipo/estado, y generar un informe formal de
 Análisis de la Demanda con los contratos seleccionados.
 """
 
+import os
 import re
-from datetime import datetime
+from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
 
@@ -19,11 +20,43 @@ import streamlit as st
 # CONFIGURACIÓN
 # ────────────────────────────────────────────────────────────
 
-CSV_PATH = Path(__file__).parent / "output" / "secop_analisis_sector_completo_20260214_061621.csv"
+BASE_DIR = Path(__file__).parent
+OUTPUT_DIR = BASE_DIR / "output"
+
+
+def _descubrir_csv() -> Path | None:
+    """Localiza el CSV de contratos más reciente.
+
+    Antes se apuntaba a un archivo con timestamp fijo que además está en
+    ``.gitignore``, así que en cualquier despliegue nuevo la app arrancaba
+    sin datos. Ahora se resuelve por orden de preferencia:
+
+      1. Variable de entorno ``SECOP_CSV`` (útil en producción).
+      2. El CSV más reciente de ``output/``.
+
+    Returns:
+        Ruta al CSV, o ``None`` si no hay ninguno (la app pedirá subirlo).
+    """
+    ruta_env = os.getenv("SECOP_CSV")
+    if ruta_env and Path(ruta_env).exists():
+        return Path(ruta_env)
+
+    if not OUTPUT_DIR.exists():
+        return None
+
+    candidatos = sorted(
+        OUTPUT_DIR.glob("*.csv"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return candidatos[0] if candidatos else None
+
+
+CSV_PATH = _descubrir_csv()
 
 st.set_page_config(
     page_title="Análisis del Sector SECOP — Santander",
-    page_icon="�",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -558,27 +591,59 @@ div[data-baseweb="tab-list"] {
 # ────────────────────────────────────────────────────────────
 
 
-def cargar_datos(path: Path | None = None, uploaded_file=None) -> pd.DataFrame:
-    """Carga el CSV desde disco o desde un archivo subido por el usuario."""
+# La normalización de esquemas vive en consulta.py, que es la que usan
+# tanto la consulta en vivo como la carga de archivos.
+from catalogos import (  # noqa: E402
+    DEPARTAMENTOS,
+    ESTADOS,
+    MODALIDADES,
+    NACIONAL,
+    TIPOS_CONTRATO,
+    opciones_desplegable,
+)
+from consulta import normalizar_esquema  # noqa: E402
+
+
+@st.cache_data(show_spinner="Cargando contratos...")
+def cargar_datos(
+    path: Path | None = None,
+    uploaded_file=None,
+    _firma: str = "",
+) -> pd.DataFrame:
+    """Carga el CSV desde disco o desde un archivo subido por el usuario.
+
+    Args:
+        path:          Ruta al CSV en disco.
+        uploaded_file: Archivo subido vía ``st.file_uploader``.
+        _firma:        Cadena que invalida la caché cuando cambia el
+                       archivo (ruta + fecha de modificación).
+
+    Returns:
+        DataFrame con el esquema del dashboard ya tipado.
+    """
     if uploaded_file is not None:
         df = pd.read_csv(uploaded_file, dtype=str)
-    elif path is not None and path.exists():
+    elif path is not None and Path(path).exists():
         df = pd.read_csv(path, dtype=str)
     else:
-        raise FileNotFoundError(
-            f"No se encontró el archivo de datos: {path}"
-        )
+        raise FileNotFoundError(f"No se encontró el archivo de datos: {path}")
 
-    df["valor_del_contrato"] = pd.to_numeric(df.get("valor_del_contrato"), errors="coerce")
-    df["valor_pagado"] = pd.to_numeric(df.get("valor_pagado"), errors="coerce")
+    df = normalizar_esquema(df)
+
+    df["valor_del_contrato"] = pd.to_numeric(
+        df["valor_del_contrato"], errors="coerce"
+    )
+    df["valor_pagado"] = pd.to_numeric(df["valor_pagado"], errors="coerce")
     df["fecha_inicio"] = pd.to_datetime(
-        df.get("fecha_de_inicio_del_contrato"), errors="coerce"
+        df["fecha_de_inicio_del_contrato"], errors="coerce", format="mixed"
     )
     df["fecha_fin"] = pd.to_datetime(
-        df.get("fecha_de_fin_del_contrato"), errors="coerce"
+        df["fecha_de_fin_del_contrato"], errors="coerce", format="mixed"
     )
-    # Columna de búsqueda normalizada (minúsculas, sin tildes extra)
-    df["_busqueda"] = df.get("objeto_del_contrato", "").fillna("").str.lower()
+    # Columna de búsqueda normalizada (minúsculas)
+    df["_busqueda"] = (
+        df["objeto_del_contrato"].astype("string").fillna("").str.lower()
+    )
     return df
 
 
@@ -730,12 +795,80 @@ def _generar_informe_excel(contratos: pd.DataFrame) -> bytes:
     return buffer.getvalue()
 
 
+# Parejas (regular, negrita) de fuentes TrueType con soporte Unicode,
+# por orden de preferencia. Se necesita una TTF real porque las fuentes
+# internas de fpdf2 solo cubren Latin-1 y el informe lleva comillas
+# tipográficas y rayas largas.
+_FUENTES_PDF: list[tuple[str, str]] = [
+    # Linux (Debian/Ubuntu: contenedores y Streamlit Community Cloud)
+    ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+    ("/usr/share/fonts/TTF/DejaVuSans.ttf",
+     "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf"),
+    # Windows
+    (r"C:\Windows\Fonts\arial.ttf", r"C:\Windows\Fonts\arialbd.ttf"),
+    (r"C:\Windows\Fonts\segoeui.ttf", r"C:\Windows\Fonts\segoeuib.ttf"),
+    (r"C:\Windows\Fonts\verdana.ttf", r"C:\Windows\Fonts\verdanab.ttf"),
+    # macOS
+    ("/System/Library/Fonts/Supplemental/Arial.ttf",
+     "/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
+    ("/Library/Fonts/Arial.ttf", "/Library/Fonts/Arial Bold.ttf"),
+]
+
+
+def _resolver_fuente_pdf() -> tuple[str, str] | None:
+    """Localiza una fuente TrueType Unicode disponible en el sistema.
+
+    La versión anterior fijaba la ruta de DejaVu en Linux, así que la
+    exportación a PDF fallaba en Windows y en cualquier imagen sin ese
+    paquete. Se puede forzar con la variable ``PDF_FONT_DIR``.
+
+    Returns:
+        Tupla ``(ruta_regular, ruta_negrita)``, o ``None`` si no hay
+        ninguna fuente utilizable.
+    """
+    dir_env = os.getenv("PDF_FONT_DIR")
+    candidatas = list(_FUENTES_PDF)
+    if dir_env:
+        candidatas.insert(0, (
+            str(Path(dir_env) / "DejaVuSans.ttf"),
+            str(Path(dir_env) / "DejaVuSans-Bold.ttf"),
+        ))
+
+    for regular, negrita in candidatas:
+        if Path(regular).exists():
+            # Si no hay negrita, se reutiliza la regular.
+            return regular, (negrita if Path(negrita).exists() else regular)
+
+    return None
+
+
+def hay_soporte_pdf() -> bool:
+    """Indica si el entorno puede generar PDFs."""
+    try:
+        import fpdf  # noqa: F401
+    except ImportError:
+        return False
+    return _resolver_fuente_pdf() is not None
+
+
 def _generar_informe_pdf(contratos: pd.DataFrame, palabras_busqueda: str = "") -> bytes:
-    """Genera el informe de Análisis de Demanda en formato PDF profesional."""
+    """Genera el informe de Análisis de Demanda en formato PDF profesional.
+
+    Raises:
+        RuntimeError: Si no hay ninguna fuente TrueType disponible.
+    """
     from fpdf import FPDF
 
-    FONT = "DejaVu"
-    FONT_DIR = "/usr/share/fonts/truetype/dejavu"
+    fuentes = _resolver_fuente_pdf()
+    if fuentes is None:
+        raise RuntimeError(
+            "No se encontró una fuente TrueType para generar el PDF. "
+            "Instala 'fonts-dejavu-core' o define PDF_FONT_DIR."
+        )
+    ruta_regular, ruta_negrita = fuentes
+
+    FONT = "InformeSans"
 
     # Márgenes y dimensiones (A4 = 210 x 297 mm)
     MARGIN_L = 15
@@ -775,10 +908,10 @@ def _generar_informe_pdf(contratos: pd.DataFrame, palabras_busqueda: str = "") -
             self.cell(0, 5, f"Página {self.page_no()}/{{nb}}", align="R")
 
     pdf = InformePDF(orientation="P", unit="mm", format="A4")
-    pdf.add_font(FONT, "", f"{FONT_DIR}/DejaVuSans.ttf")
-    pdf.add_font(FONT, "B", f"{FONT_DIR}/DejaVuSans-Bold.ttf")
-    pdf.add_font(FONT, "I", f"{FONT_DIR}/DejaVuSans.ttf")
-    pdf.add_font(FONT, "BI", f"{FONT_DIR}/DejaVuSans-Bold.ttf")
+    pdf.add_font(FONT, "", ruta_regular)
+    pdf.add_font(FONT, "B", ruta_negrita)
+    pdf.add_font(FONT, "I", ruta_regular)
+    pdf.add_font(FONT, "BI", ruta_negrita)
     pdf.set_left_margin(MARGIN_L)
     pdf.set_right_margin(MARGIN_R)
     pdf.alias_nb_pages()
@@ -1005,36 +1138,291 @@ def _generar_informe_pdf(contratos: pd.DataFrame, palabras_busqueda: str = "") -
 # UI
 # ────────────────────────────────────────────────────────────
 
-# ── Datos de entrada ──
-uploaded_file = None
-if not CSV_PATH.exists():
-    st.warning(
-        f"No se encontró el dataset local en `{CSV_PATH}`.\n"
-        "Puedes subir un CSV generado por el pipeline o usar un archivo de ejemplo."
+# ── Panel de consulta (barra lateral) ──
+# La app consulta los portales EN VIVO: lo que se define aquí es el
+# alcance de la búsqueda que se enviará a SECOP al pulsar "Buscar".
+with st.sidebar:
+    st.markdown("""
+    <div class="sidebar-brand">
+        <h3>🔎 Consulta a SECOP</h3>
+        <p>Los datos se descargan al momento de buscar</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    modo_datos = st.radio(
+        "Origen de los datos",
+        ["Consulta en vivo", "Archivo CSV"],
+        help=(
+            "«Consulta en vivo» interroga los portales en el momento. "
+            "«Archivo CSV» abre una descarga previa, sin tocar la red."
+        ),
     )
-    uploaded_file = st.file_uploader(
-        "Cargar archivo CSV de contratos",
-        type=["csv"],
-        help="El CSV debe contener las columnas mínimas esperadas por el dashboard.",
+
+    uploaded_file = None
+    ejecutar_consulta = False
+    fuentes_sel: list[str] = []
+    q_depto = q_modalidad = q_estado = q_tipo = ""
+    q_fecha_ini = q_fecha_fin = None
+    q_max_paginas = 3
+    q_max_api = 20000
+
+    if modo_datos == "Consulta en vivo":
+        fuentes_sel = st.multiselect(
+            "Portales a consultar",
+            ["SECOP II", "SECOP I"],
+            default=["SECOP II"],
+            help=(
+                "SECOP II (API): rápido, filtros en servidor, publica con "
+                "unos días de rezago. SECOP I (portal): más reciente, pero "
+                "va paginado y más lento."
+            ),
+        )
+
+        # Desplegables construidos desde catalogos.py: la etiqueta es
+        # legible, pero lo que viaja a cada portal es su valor exacto.
+        # Así es imposible fallar por una tilde o una mayúscula.
+        mapa_deptos = opciones_desplegable(DEPARTAMENTOS, NACIONAL)
+        etiquetas_deptos = list(mapa_deptos)
+        q_depto_label = st.selectbox(
+            "Departamento",
+            etiquetas_deptos,
+            index=etiquetas_deptos.index("Santander"),
+            help="Elige «Todo el país» para una consulta nacional.",
+        )
+        opcion_depto = mapa_deptos[q_depto_label]
+        q_depto = opcion_depto.etiqueta if opcion_depto else ""
+
+        mapa_modalidades = opciones_desplegable(MODALIDADES)
+        q_modalidad_label = st.selectbox(
+            "Modalidad de contratación", list(mapa_modalidades)
+        )
+        opcion_modalidad = mapa_modalidades[q_modalidad_label]
+        q_modalidad = opcion_modalidad.etiqueta if opcion_modalidad else ""
+
+        # Todos los tipos son exclusivos de SECOP II, así que la nota va
+        # en la ayuda del campo en vez de repetirse en cada opción.
+        mapa_tipos = opciones_desplegable(TIPOS_CONTRATO, anotar=False)
+        q_tipo_label = st.selectbox(
+            "Tipo de contrato",
+            list(mapa_tipos),
+            help=(
+                "Solo filtra en SECOP II: la tabla de resultados de "
+                "SECOP I no incluye el tipo de contrato."
+            ),
+        )
+        opcion_tipo = mapa_tipos[q_tipo_label]
+        q_tipo = opcion_tipo.etiqueta if opcion_tipo else ""
+
+        mapa_estados = opciones_desplegable(ESTADOS)
+        q_estado_label = st.selectbox("Estado", list(mapa_estados))
+        opcion_estado = mapa_estados[q_estado_label]
+        q_estado = opcion_estado.etiqueta if opcion_estado else ""
+
+        usar_fechas = st.checkbox("Acotar por fechas", value=False)
+        if usar_fechas:
+            col_fi, col_ff = st.columns(2)
+            with col_fi:
+                q_fecha_ini = st.date_input(
+                    "Desde", value=date(date.today().year, 1, 1),
+                    format="DD/MM/YYYY",
+                )
+            with col_ff:
+                q_fecha_fin = st.date_input(
+                    "Hasta", value=date.today(), format="DD/MM/YYYY",
+                )
+
+        if "SECOP I" in fuentes_sel:
+            q_max_paginas = st.slider(
+                "Páginas de SECOP I", 1, 20, 3,
+                help=(
+                    "100 procesos por página, con pausa entre ellas para no "
+                    "activar el bloqueo del portal. Más páginas = más "
+                    "cobertura y más espera."
+                ),
+            )
+
+        if "SECOP II" in fuentes_sel:
+            q_max_api = st.select_slider(
+                "Máximo de contratos (SECOP II)",
+                options=[1000, 5000, 20000, 50000, 100000, 250000],
+                value=20000,
+                help=(
+                    "Una consulta nacional sin filtros supera los 5,8 "
+                    "millones de contratos: este tope evita descargas "
+                    "interminables. Si se alcanza, se avisa."
+                ),
+            )
+
+        ejecutar_consulta = st.button(
+            "🔎 Buscar en SECOP", type="primary", width="stretch"
+        )
+        st.caption(
+            "La consulta solo se ejecuta con este botón: los demás filtros "
+            "refinan lo ya descargado sin volver a la red."
+        )
+    else:
+        uploaded_file = st.file_uploader(
+            "Cargar archivo CSV de contratos",
+            type=["csv"],
+            help="Acepta CSV de cualquiera de las dos rutas del pipeline.",
+        )
+        if uploaded_file is None and CSV_PATH is not None:
+            st.caption(f"Usando el más reciente: `{Path(CSV_PATH).name}`")
+
+    st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
+
+# Reserva el espacio del encabezado: se rellena cuando ya hay resultados.
+hero_slot = st.empty()
+
+# ── Barra de búsqueda ──
+st.markdown('<div class="search-container">', unsafe_allow_html=True)
+consulta = st.text_input(
+    "🔍 Buscar por objeto del contrato",
+    placeholder="Ej: suministro alimentos, vigilancia, consultoría, combustible...",
+    help=(
+        "Palabras separadas por espacio; se exige que el objeto las contenga "
+        "TODAS. En SECOP II el filtro viaja al servidor; en SECOP I se aplica "
+        "sobre las páginas descargadas."
+    ),
+    label_visibility="collapsed",
+)
+if not consulta.strip():
+    st.markdown(
+        '<p class="search-hint">💡 Escribe palabras clave y pulsa '
+        '<em>Buscar en SECOP</em> en la barra lateral.</p>',
+        unsafe_allow_html=True,
     )
-    if uploaded_file is None:
-        st.info("Sube un archivo CSV para iniciar el análisis.")
+st.markdown('</div>', unsafe_allow_html=True)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _consulta_cacheada(
+    fuentes: tuple[str, ...],
+    departamento: str,
+    modalidad: str,
+    estado: str,
+    palabra_clave: str,
+    fecha_inicio: str,
+    fecha_fin: str,
+    tipo_contrato: str,
+    max_paginas: int,
+    max_registros_api: int,
+    _version: int,
+):
+    """Envoltura cacheada de la consulta en vivo.
+
+    La caché dura 5 minutos y está indexada por los parámetros de
+    búsqueda: repetir la misma consulta dentro de esa ventana no vuelve
+    a golpear los portales (importante para no activar el WAF de
+    SECOP I). ``_version`` permite forzar una descarga nueva.
+    """
+    from consulta import consultar_en_vivo
+
+    return consultar_en_vivo(
+        fuentes=fuentes,
+        departamento=departamento,
+        modalidad=modalidad,
+        estado=estado,
+        palabra_clave=palabra_clave,
+        fecha_inicio=fecha_inicio,
+        fecha_fin=fecha_fin,
+        tipo_contrato=tipo_contrato,
+        max_paginas_secop1=max_paginas,
+        max_registros_api=max_registros_api,
+    )
+
+
+# ── Obtención de los datos ──
+df = None
+informe_consulta = st.session_state.get("_informe")
+
+if modo_datos == "Consulta en vivo":
+    if ejecutar_consulta:
+        if not fuentes_sel:
+            st.warning("Selecciona al menos un portal en la barra lateral.")
+        else:
+            try:
+                with st.spinner(
+                    f"Consultando {' y '.join(fuentes_sel)} en tiempo real..."
+                ):
+                    df, informe_consulta = _consulta_cacheada(
+                        tuple(fuentes_sel),
+                        q_depto,
+                        q_modalidad,
+                        q_estado,
+                        consulta,
+                        q_fecha_ini.strftime("%d/%m/%Y") if q_fecha_ini else "",
+                        q_fecha_fin.strftime("%d/%m/%Y") if q_fecha_fin else "",
+                        q_tipo,
+                        q_max_paginas,
+                        q_max_api,
+                        st.session_state.get("_version_consulta", 0),
+                    )
+                st.session_state["_df"] = df
+                st.session_state["_informe"] = informe_consulta
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"La consulta falló: {exc}")
+                df = st.session_state.get("_df")
+    else:
+        df = st.session_state.get("_df")
+
+    if df is None:
+        st.info(
+            "Define el alcance en la barra lateral y pulsa "
+            "**🔎 Buscar en SECOP** para traer contratos actuales."
+        )
+        st.stop()
+else:
+    try:
+        firma = ""
+        if uploaded_file is None and CSV_PATH is not None:
+            firma = f"{CSV_PATH}:{Path(CSV_PATH).stat().st_mtime}"
+        elif uploaded_file is None:
+            st.info("Sube un CSV o cambia a «Consulta en vivo».")
+            st.stop()
+        df = cargar_datos(CSV_PATH, uploaded_file, _firma=firma)
+        informe_consulta = None
+    except FileNotFoundError as exc:
+        st.error(str(exc))
+        st.stop()
+    except Exception as exc:  # noqa: BLE001
+        st.error("Error al cargar los datos: " + str(exc))
         st.stop()
 
-try:
-    df = cargar_datos(CSV_PATH if CSV_PATH.exists() else None, uploaded_file)
-except FileNotFoundError as exc:
-    st.error(str(exc))
-    st.stop()
-except Exception as exc:
-    st.error("Error al cargar los datos: " + str(exc))
+# Tipado de las columnas que usa el resto del dashboard.
+df = df.copy()
+df["valor_del_contrato"] = pd.to_numeric(
+    df["valor_del_contrato"], errors="coerce"
+)
+df["valor_pagado"] = pd.to_numeric(df.get("valor_pagado"), errors="coerce")
+df["fecha_inicio"] = pd.to_datetime(
+    df["fecha_de_inicio_del_contrato"], errors="coerce", format="mixed"
+)
+df["fecha_fin"] = pd.to_datetime(
+    df["fecha_de_fin_del_contrato"], errors="coerce", format="mixed"
+)
+if "_busqueda" not in df.columns:
+    df["_busqueda"] = (
+        df["objeto_del_contrato"].astype("string").fillna("").str.lower()
+    )
+
+# Avisos de la consulta: truncado por tope, filtros no aplicables a un
+# portal, etc. Se muestran arriba para que no pasen desapercibidos.
+for aviso in (informe_consulta or {}).get("avisos", []):
+    st.info(aviso, icon="ℹ️")
+
+if df.empty:
+    st.warning(
+        "La consulta no devolvió contratos. Prueba a ampliar el rango de "
+        "fechas, quitar la modalidad o cambiar de portal."
+    )
     st.stop()
 
 n_total = len(df)
 n_entidades_hero = df["nombre_entidad"].nunique()
 n_modalidades_hero = df["modalidad_de_contratacion"].nunique()
 
-st.markdown(f"""
+hero_slot.markdown(f"""
 <div class="main-header">
     <div class="hero-badge">CONTRATACIÓN PÚBLICA</div>
     <h1>ANÁLISIS DEL SECTOR<br>SECOP COLOMBIA</h1>
@@ -1087,24 +1475,14 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ── Barra de búsqueda ──
-st.markdown('<div class="search-container">', unsafe_allow_html=True)
-consulta = st.text_input(
-    "🔍 Buscar por objeto del contrato",
-    placeholder="Ej: suministro alimentos, vigilancia, consultoría, combustible...",
-    help="Escribe palabras clave separadas por espacio. Se buscan contratos cuyo objeto contenga TODAS las palabras (AND lógico).",
-    label_visibility="collapsed",
-)
-if not consulta.strip():
-    st.markdown('<p class="search-hint">💡 Escribe palabras clave para filtrar contratos por objeto. Ejemplo: <em>suministro alimentos</em></p>', unsafe_allow_html=True)
-st.markdown('</div>', unsafe_allow_html=True)
-
-# ── Sidebar profesional ──
+# ── Refinado de los resultados (barra lateral) ──
+# Estos controles NO vuelven a consultar los portales: filtran en local
+# lo que ya se descargó.
 with st.sidebar:
     st.markdown("""
     <div class="sidebar-brand">
-        <h3>🎯 Panel de Filtros</h3>
-        <p>Refina tu búsqueda con los controles</p>
+        <h3>🎛️ Refinar resultados</h3>
+        <p>Filtra lo descargado sin volver a consultar</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1177,6 +1555,68 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
+    # ── Procedencia y frescura de lo que se está viendo ──
+    st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
+    st.markdown(
+        '<p class="filter-label"><span class="fl-icon">🕒</span> '
+        'Procedencia de los datos</p>',
+        unsafe_allow_html=True,
+    )
+
+    if informe_consulta:
+        momento = informe_consulta["consultado_en"]
+        minutos = (datetime.now() - momento).total_seconds() / 60
+        frescura = "ahora mismo" if minutos < 1 else f"hace {int(minutos)} min"
+        st.caption(f"🟢 Consultado **{frescura}** · {momento:%d/%m/%Y %H:%M:%S}")
+
+        for fuente, cantidad in informe_consulta.get("por_fuente", {}).items():
+            st.caption(f"· {fuente}: **{cantidad:,}** contratos")
+
+        coincidencias = informe_consulta.get("coincidencias_api")
+        if coincidencias is not None and informe_consulta.get("truncado"):
+            st.caption(f"· Coincidencias totales: **{coincidencias:,}**")
+
+        for fuente, error in informe_consulta.get("errores", {}).items():
+            st.warning(f"{fuente} falló: {error}", icon="⚠️")
+
+        if st.button("↻ Forzar descarga nueva", width="stretch"):
+            st.session_state["_version_consulta"] = (
+                st.session_state.get("_version_consulta", 0) + 1
+            )
+            st.cache_data.clear()
+            st.rerun()
+
+    elif CSV_PATH is not None and Path(CSV_PATH).exists():
+        modificado = datetime.fromtimestamp(Path(CSV_PATH).stat().st_mtime)
+        antiguedad = (datetime.now() - modificado).days
+        if antiguedad <= 7:
+            icono = "🟢"
+        elif antiguedad <= 30:
+            icono = "🟡"
+        else:
+            icono = "🔴"
+        st.caption(
+            f"{icono} Archivo extraído hace **{antiguedad} día(s)**  \n"
+            f"`{Path(CSV_PATH).name}`"
+        )
+    else:
+        st.caption("Archivo subido manualmente.")
+
+    fecha_max_datos = df["fecha_inicio"].max()
+    if pd.notna(fecha_max_datos):
+        st.caption(f"Contrato más reciente: **{fecha_max_datos:%d/%m/%Y}**")
+
+    if modo_datos == "Consulta en vivo" and not df.empty:
+        st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
+        st.download_button(
+            "💾 Guardar esta consulta (CSV)",
+            data=df.drop(columns=["_busqueda"], errors="ignore")
+                   .to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"secop_consulta_{datetime.now():%Y%m%d_%H%M%S}.csv",
+            mime="text/csv",
+            width="stretch",
+        )
+
 # ── Aplicar búsqueda y filtros ──
 resultado = buscar(df, consulta)
 
@@ -1246,6 +1686,8 @@ st.markdown("")
 
 # ── Columnas a mostrar ──
 columnas_display = [
+    # Al combinar portales hay que poder distinguir el origen de cada fila.
+    "fuente",
     "nombre_entidad",
     "ciudad",
     "modalidad_de_contratacion",
@@ -1271,14 +1713,19 @@ if resultado.empty:
     """, unsafe_allow_html=True)
 else:
     # Tabs para organizar contenido
-    tab_tabla, tab_analisis = st.tabs(["📊 Tabla de Resultados", "📋 Análisis de la Demanda"])
+    tab_tabla, tab_analisis, tab_estudio = st.tabs([
+        "📊 Tabla de Resultados",
+        "📋 Análisis de la Demanda",
+        "📑 Estudio del Sector",
+    ])
 
     with tab_tabla:
         st.dataframe(
             resultado[columnas_existentes].reset_index(drop=True),
-            use_container_width=True,
+            width="stretch",
             height=550,
             column_config={
+                "fuente": st.column_config.TextColumn("Portal", width="small"),
                 "nombre_entidad": st.column_config.TextColumn("Entidad", width="medium"),
                 "ciudad": st.column_config.TextColumn("Ciudad", width="small"),
                 "modalidad_de_contratacion": st.column_config.TextColumn("Modalidad", width="medium"),
@@ -1324,25 +1771,80 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
-            col_exp1, col_exp2, col_exp_spacer = st.columns([1, 1, 2])
+            col_exp1, col_exp2, col_exp3, col_exp4 = st.columns(4)
+            sello = datetime.now().strftime("%Y%m%d_%H%M")
 
             with col_exp1:
-                csv_bytes = contratos_informe[columnas_existentes].to_csv(index=False).encode("utf-8-sig")
+                csv_bytes = (
+                    contratos_informe[columnas_existentes]
+                    .to_csv(index=False)
+                    .encode("utf-8-sig")
+                )
                 st.download_button(
-                    label="📥 Descargar Informe (CSV)",
+                    label="📥 CSV",
                     data=csv_bytes,
-                    file_name="analisis_demanda.csv",
+                    file_name=f"analisis_demanda_{sello}.csv",
                     mime="text/csv",
+                    width="stretch",
                 )
 
             with col_exp2:
-                pdf_bytes = _generar_informe_pdf(contratos_informe, consulta)
                 st.download_button(
-                    label="📥 Descargar Informe (PDF)",
-                    data=pdf_bytes,
-                    file_name="analisis_demanda.pdf",
-                    mime="application/pdf",
+                    label="📄 TXT",
+                    data=_generar_informe_texto(contratos_informe).encode("utf-8"),
+                    file_name=f"analisis_demanda_{sello}.txt",
+                    mime="text/plain",
+                    width="stretch",
                 )
+
+            with col_exp3:
+                try:
+                    excel_bytes = _generar_informe_excel(contratos_informe)
+                    st.download_button(
+                        label="📗 Excel",
+                        data=excel_bytes,
+                        file_name=f"analisis_demanda_{sello}.xlsx",
+                        mime=(
+                            "application/vnd.openxmlformats-officedocument"
+                            ".spreadsheetml.sheet"
+                        ),
+                        width="stretch",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    st.button(
+                        "📗 Excel", disabled=True, width="stretch",
+                        help=f"No disponible: {exc}",
+                    )
+
+            with col_exp4:
+                # El PDF se genera solo cuando se pide: construirlo en cada
+                # recarga es costoso y, si falla, tumbaría toda la página.
+                if not hay_soporte_pdf():
+                    st.button(
+                        "📕 PDF", disabled=True, width="stretch",
+                        help=(
+                            "Falta una fuente TrueType en el sistema. "
+                            "Instala 'fonts-dejavu-core' o define PDF_FONT_DIR."
+                        ),
+                    )
+                elif st.session_state.get("_pdf_listo") == sello:
+                    st.download_button(
+                        label="📕 Descargar PDF",
+                        data=st.session_state["_pdf_bytes"],
+                        file_name=f"analisis_demanda_{sello}.pdf",
+                        mime="application/pdf",
+                        width="stretch",
+                    )
+                elif st.button("📕 Generar PDF", width="stretch"):
+                    try:
+                        with st.spinner("Generando PDF..."):
+                            st.session_state["_pdf_bytes"] = _generar_informe_pdf(
+                                contratos_informe, consulta
+                            )
+                        st.session_state["_pdf_listo"] = sello
+                        st.rerun()
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"No se pudo generar el PDF: {exc}")
 
             st.markdown(
                 "Se validan en el portal de contratación SECOP procesos adelantados "
@@ -1460,3 +1962,175 @@ else:
                 </div>
                 """, unsafe_allow_html=True)
 
+
+    # ══════════════════════════════════════════════════════════
+    # ESTUDIO DEL SECTOR (Guía V3 de Colombia Compra Eficiente)
+    # ══════════════════════════════════════════════════════════
+    with tab_estudio:
+        from estudio_sector import (
+            ContextoEstudio,
+            construir_estudio,
+            cop,
+            exportar_docx,
+            exportar_pdf,
+            hay_soporte_pdf,
+        )
+
+        st.markdown("""
+        <div class="analisis-header">
+            <h2>📑 ESTUDIO DEL SECTOR</h2>
+            <p style="margin:0.3rem 0 0 0; opacity:0.85; font-size:0.85rem;">
+                Estructura de la Guía para la Elaboración de Estudios del
+                Sector V3 (2025) — Colombia Compra Eficiente
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown(
+            "El documento se construye con los contratos actualmente "
+            "filtrados. Completa los datos de encabezado y descárgalo en "
+            "**Word** (para seguir editándolo) o en **PDF** (para anexarlo)."
+        )
+
+        base_estudio = resultado.reset_index(drop=True)
+        st.caption(
+            f"Muestra: **{len(base_estudio):,}** contratos · "
+            f"Valor total: **{cop(base_estudio['valor_del_contrato'].sum())}**"
+        )
+
+        with st.form("form_estudio"):
+            col_e1, col_e2 = st.columns(2)
+            with col_e1:
+                e_objeto = st.text_area(
+                    "Objeto a contratar",
+                    value=consulta.strip().capitalize() if consulta.strip() else "",
+                    height=80,
+                    placeholder="Ej: Suministro de combustible para el parque automotor…",
+                )
+                e_entidad = st.text_input("Entidad Estatal")
+                e_modalidad = st.text_input("Modalidad prevista")
+            with col_e2:
+                e_depto = st.text_input(
+                    "Departamento",
+                    value=q_depto if modo_datos == "Consulta en vivo" else "",
+                )
+                e_municipio = st.text_input("Municipio")
+                e_unspsc = st.text_input(
+                    "Código UNSPSC", placeholder="Ej: 15101505",
+                )
+            e_elaborado = st.text_input("Elaborado por")
+            e_obs = st.text_area(
+                "Contexto económico del sector (opcional)",
+                height=80,
+                placeholder=(
+                    "Notas sobre el sector: dinámica de precios, agentes, "
+                    "gremios, factores que inciden en el costo…"
+                ),
+            )
+            generar = st.form_submit_button(
+                "📑 Generar Estudio del Sector", type="primary"
+            )
+
+        if generar:
+            try:
+                contexto = ContextoEstudio(
+                    objeto=e_objeto,
+                    entidad=e_entidad,
+                    departamento=e_depto,
+                    municipio=e_municipio,
+                    modalidad_prevista=e_modalidad,
+                    codigo_unspsc=e_unspsc,
+                    elaborado_por=e_elaborado,
+                    observaciones=e_obs,
+                    filtros={
+                        "Palabra clave": consulta,
+                        "Departamento": e_depto,
+                        "Modalidad": q_modalidad if modo_datos == "Consulta en vivo" else "",
+                        "Tipo de contrato": q_tipo if modo_datos == "Consulta en vivo" else "",
+                    },
+                    fuentes=(
+                        sorted(base_estudio["fuente"].dropna().unique())
+                        if "fuente" in base_estudio.columns else ["SECOP"]
+                    ),
+                    consultado_en=(
+                        informe_consulta.get("consultado_en")
+                        if informe_consulta else None
+                    ),
+                )
+                with st.spinner("Analizando el sector y construyendo el documento..."):
+                    st.session_state["_estudio"] = construir_estudio(
+                        base_estudio, contexto
+                    )
+                st.success("Estudio generado.")
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"No se pudo generar el estudio: {exc}")
+
+        estudio = st.session_state.get("_estudio")
+        if estudio:
+            est = estudio["mercado"]["estadisticas"]
+            sello_est = datetime.now().strftime("%Y%m%d_%H%M")
+
+            if est.get("n"):
+                st.markdown("#### Resumen del análisis de precios")
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Precio promedio", cop(est["media"]))
+                m2.metric("Mediana", cop(est["mediana"]))
+                m3.metric(
+                    "Promedio ajustado", cop(est["ajustadas"].get("media")),
+                    help=(
+                        "Excluye los valores atípicos según el criterio del "
+                        "rango intercuartílico que recomienda la guía."
+                    ),
+                )
+                m4.metric(
+                    "Atípicos detectados",
+                    f"{est['atipicos']['n']} ({est['atipicos']['pct']:.1f}%)",
+                )
+                st.caption(
+                    f"Coeficiente de variación: **{est['coef_variacion']:.1f}%** — "
+                    f"{estudio['mercado']['interpretacion']}."
+                )
+
+            col_d1, col_d2 = st.columns(2)
+            with col_d1:
+                try:
+                    st.download_button(
+                        "📘 Descargar en Word (.docx)",
+                        data=exportar_docx(estudio),
+                        file_name=f"estudio_del_sector_{sello_est}.docx",
+                        mime=(
+                            "application/vnd.openxmlformats-officedocument"
+                            ".wordprocessingml.document"
+                        ),
+                        width="stretch",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Word no disponible: {exc}")
+
+            with col_d2:
+                if not hay_soporte_pdf():
+                    st.button(
+                        "📕 PDF", disabled=True, width="stretch",
+                        help=(
+                            "Falta una fuente TrueType. Instala "
+                            "'fonts-dejavu-core' o define PDF_FONT_DIR."
+                        ),
+                    )
+                else:
+                    try:
+                        st.download_button(
+                            "📕 Descargar en PDF",
+                            data=exportar_pdf(estudio),
+                            file_name=f"estudio_del_sector_{sello_est}.pdf",
+                            mime="application/pdf",
+                            width="stretch",
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"PDF no disponible: {exc}")
+
+            st.caption(
+                "Los apartados que exigen criterio de la Entidad (contexto "
+                "técnico y regulatorio, presupuesto oficial, requisitos "
+                "habilitantes, riesgos) se emiten señalados para que los "
+                "completes: no se derivan de los datos de SECOP."
+            )

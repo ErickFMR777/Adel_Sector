@@ -32,83 +32,74 @@ HTML_MOCK_SECOP = """
 <html>
 <head><title>SECOP I - Resultados</title></head>
 <body>
-<table class="tbl_resulados">
-    <thead>
-        <tr>
-            <th>Número del Proceso</th>
-            <th>Entidad</th>
-            <th>Objeto del Contrato</th>
-            <th>Modalidad</th>
-            <th>Fecha Apertura</th>
-            <th>Fecha Cierre</th>
-            <th>Cuantía</th>
-            <th>Estado</th>
-            <th>Departamento</th>
-            <th>Municipio</th>
-        </tr>
-    </thead>
-    <tbody>
-        <tr>
-            <td><a href="https://www.contratos.gov.co/consultas/detalleProceso.do?id=2023001">2023-OP-001</a></td>
-            <td>ALCALDÍA DE BOGOTÁ</td>
-            <td>Servicios de vigilancia y seguridad</td>
-            <td>Licitación pública</td>
-            <td>01/02/2023</td>
-            <td>28/02/2023</td>
-            <td>$485.750.000</td>
-            <td>Adjudicado</td>
-            <td>BOGOTÁ D.C.</td>
-            <td>BOGOTÁ</td>
-        </tr>
-        <tr>
-            <td><a href="https://www.contratos.gov.co/consultas/detalleProceso.do?id=2023002">2023-OP-002</a></td>
-            <td>GOBERNACIÓN DE ANTIOQUIA</td>
-            <td>Consultoría en tecnología de información</td>
-            <td>Contratación directa</td>
-            <td>05/02/2023</td>
-            <td>10/03/2023</td>
-            <td>$120.500.000</td>
-            <td>En evaluación</td>
-            <td>ANTIOQUIA</td>
-            <td>MEDELLÍN</td>
-        </tr>
-        <tr>
-            <td><a href="https://www.contratos.gov.co/consultas/detalleProceso.do?id=2023003">2023-OP-003</a></td>
-            <td>HOSPITAL UNIVERSITARIO SAN IGNACIO</td>
-            <td>Suministro de medicamentos e insumos médicos</td>
-            <td>Licitación abierta</td>
-            <td>03/02/2023</td>
-            <td>25/02/2023</td>
-            <td>$2.350.000.000</td>
-            <td>Adjudicado</td>
-            <td>BOGOTÁ D.C.</td>
-            <td>BOGOTÁ</td>
-        </tr>
-        <tr>
-            <td><a href="https://www.contratos.gov.co/consultas/detalleProceso.do?id=2023004">2023-OP-004</a></td>
-            <td>MUNICIPALIDAD DE CALI</td>
-            <td>Obras civiles de infraestructura vial</td>
-            <td>Licitación pública</td>
-            <td>02/02/2023</td>
-            <td>20/02/2023</td>
-            <td>$5.890.000.000</td>
-            <td>Adjudicado</td>
-            <td>VALLE DEL CAUCA</td>
-            <td>CALI</td>
-        </tr>
-        <tr>
-            <td><a href="https://www.contratos.gov.co/consultas/detalleProceso.do?id=2023005">2023-OP-005</a></td>
-            <td>UNIVERSIDAD NACIONAL DE COLOMBIA</td>
-            <td>Renovación de equipos de laboratorio</td>
-            <td>Contratación directa</td>
-            <td>06/02/2023</td>
-            <td>15/03/2023</td>
-            <td>$780.250.000</td>
-            <td>Cancelado</td>
-            <td>BOGOTÁ D.C.</td>
-            <td>BOGOTÁ</td>
-        </tr>
-    </tbody>
+<input type="hidden" name="totalResultados" value='5' />
+<table>
+    <tr>
+        <td>&#8711;</td>
+        <td>Número de Proceso</td>
+        <td>Tipo de Proceso</td>
+        <td>Estado</td>
+        <td>Entidad</td>
+        <td>Objeto</td>
+        <td>Departamento y Municipio de Ejecución</td>
+        <td>Cuantía</td>
+        <td>Fecha(dd-mm-aaaa)</td>
+    </tr>
+    <tr>
+        <td>1</td>
+        <td><a href="javascript: consultaProceso('26-11-14696064')">SAMC 004 DE 2026</a></td>
+        <td>Selección Abreviada de Menor Cuantía (Ley 1150 de 2007)</td>
+        <td>Celebrado</td>
+        <td>SANTANDER - ALCALDÍA MUNICIPIO DE SAN JOSÉ DE MIRANDA</td>
+        <td>SERVICIO DE EXTENSIÓN AGROPECUARIA DE MANERA PERMANENTE</td>
+        <td>Santander : San José de Miranda</td>
+        <td>$255.000.000,00</td>
+        <td>Fecha de Celebración del Primer Contrato 31-03-2026</td>
+    </tr>
+    <tr>
+        <td>2</td>
+        <td><a href="javascript: consultaProceso('26-13-14690001')">MC-001-2026</a></td>
+        <td>Contratación Mínima Cuantía</td>
+        <td>Celebrado</td>
+        <td>SANTANDER - ALCALDÍA MUNICIPIO DE GIRÓN</td>
+        <td>SUMINISTRO DE COMBUSTIBLE PARA EL PARQUE AUTOMOTOR</td>
+        <td>Santander : Girón</td>
+        <td>$94.758.732,00</td>
+        <td>Fecha de Celebración del Primer Contrato 12-02-2026</td>
+    </tr>
+    <tr>
+        <td>3</td>
+        <td><a href="javascript: consultaProceso('26-1-14688888')">LP-002-2026</a></td>
+        <td>Licitación Pública</td>
+        <td>Convocado</td>
+        <td>SANTANDER - GOBERNACIÓN DE SANTANDER</td>
+        <td>OBRAS CIVILES DE MEJORAMIENTO DE INFRAESTRUCTURA VIAL</td>
+        <td>Santander : Bucaramanga</td>
+        <td>$5.890.000.000,00</td>
+        <td>Fecha de Apertura 05-01-2026</td>
+    </tr>
+    <tr>
+        <td>4</td>
+        <td><a href="javascript: consultaProceso('26-4-14687777')">RE-010-2026</a></td>
+        <td>Régimen Especial</td>
+        <td>Liquidado</td>
+        <td>SANTANDER - UNIVERSIDAD INDUSTRIAL DE SANTANDER</td>
+        <td>RENOVACIÓN DE EQUIPOS DE LABORATORIO</td>
+        <td>Santander : Bucaramanga</td>
+        <td>$780.250.000,00</td>
+        <td>Fecha de Liquidación 20-01-2026</td>
+    </tr>
+    <tr>
+        <td>5</td>
+        <td><a href="javascript: consultaProceso('26-13-14686666')">MC-045-2026</a></td>
+        <td>Contratación Mínima Cuantía</td>
+        <td>Celebrado</td>
+        <td>SANTANDER - ALCALDÍA MUNICIPIO DE PIEDECUESTA</td>
+        <td>SERVICIO DE VIGILANCIA Y SEGURIDAD PRIVADA</td>
+        <td>Santander : Piedecuesta</td>
+        <td>$120.500.000,00</td>
+        <td>Fecha de Celebración del Primer Contrato 28-01-2026</td>
+    </tr>
 </table>
 </body>
 </html>

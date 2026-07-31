@@ -1,20 +1,21 @@
 """
-detail_scraper.py — Extracción de detalles individuales de procesos SECOP I.
+detail_scraper.py — Extracción de la ficha de detalle de procesos SECOP I.
+
+La ficha (``detalleProceso.do?numConstancia=<id>``) contiene los datos
+que no aparecen en la tabla de resultados: contratista, identificación,
+cuantía definitiva, fechas de apertura y cierre, tipo de contrato, etc.
 
 Responsabilidades:
-  1. Navegar a la URL de detalle de un proceso.
-  2. Parsear los campos de la ficha de detalle (tabla de key-value).
-  3. Extraer campos enriquecidos: proveedor, NIT, valor adjudicado,
-     valor estimado, fecha de adjudicación, etc.
-  4. Soportar extracción masiva con control de ritmo (rate limiting)
-     para evitar bloqueos.
-  5. Consolidar todos los detalles en un DataFrame.
+  1. Descargar la ficha de un proceso (HTTP directo o, opcionalmente,
+     reutilizando un WebDriver ya abierto).
+  2. Convertir los pares etiqueta-valor del HTML en campos tipados.
+  3. Extracción masiva con control de ritmo para no despertar al WAF.
+  4. Mantener una base histórica incremental.
 
-Diseño escalable:
-  • Cada detalle se extrae de forma independiente y atómica.
-  • Si un proceso falla, se registra el error y se continúa con el siguiente.
-  • El rate limiter es configurable para respetar el servidor.
-  • El módulo se puede invocar en paralelo con múltiples drivers.
+Las etiquetas del mapeo están tomadas del HTML real en producción: el
+portal usa "Tipo de Proceso" (no "Modalidad de Contratación"),
+"Cuantía a Contratar" para el presupuesto y "Cuantía Definitiva del
+Contrato" para el valor final.
 """
 
 from __future__ import annotations
@@ -22,59 +23,57 @@ from __future__ import annotations
 import logging
 import re
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Optional
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, urlparse
 
 import pandas as pd
-from bs4 import BeautifulSoup, Tag
-from selenium.common.exceptions import TimeoutException, WebDriverException
-from selenium.webdriver.common.by import By
-from selenium.webdriver.remote.webdriver import WebDriver
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
+from bs4 import BeautifulSoup
 
 from config import (
     COLUMNAS_DETALLE,
-    DEFAULT_TIMEOUT,
+    HTTP_DELAY,
     MAX_RETRIES,
     RETRY_BACKOFF,
-    SECOP_BASE_URL,
+    SECOP_DETALLE_URL,
 )
-from exceptions import SecopParsingError, SecopTimeoutError
 
 logger = logging.getLogger(__name__)
 
+_RE_FECHA = re.compile(r"(\d{1,2}[-/]\d{1,2}[-/]\d{4})")
+_RE_NUMERO_PROCESO = re.compile(
+    r"Detalle\s+del\s+Proceso\s+N[úu]mero:\s*(.+)", re.IGNORECASE
+)
+
 
 # ════════════════════════════════════════════════════════════
-# 1. DATACLASS PARA DETALLE DE PROCESO
+# 1. DATACLASS
 # ════════════════════════════════════════════════════════════
 
 
 @dataclass
 class DetalleProceso:
-    """Representa los datos detallados de un proceso de contratación.
-
-    Cada campo corresponde a una etiqueta de la ficha de detalle del
-    portal SECOP I.  Los campos se llenan progresivamente a medida
-    que se encuentran en el HTML.
-    """
+    """Datos detallados de un proceso de contratación de SECOP I."""
 
     numero_proceso: str = ""
+    id_proceso: str = ""
     entidad: str = ""
     objeto_contrato: str = ""
     modalidad: str = ""
+    estado: str = ""
     fecha_apertura: str = ""
     fecha_cierre: str = ""
     fecha_adjudicacion: str = ""
     valor_estimado: str = ""
     valor_adjudicado: str = ""
     valor_contrato: str = ""
+    numero_contrato: str = ""
+    tipo_contrato: str = ""
+    estado_contrato: str = ""
     proveedor: str = ""
     nit_proveedor: str = ""
     departamento: str = ""
     municipio: str = ""
-    estado: str = ""
     url_detalle: str = ""
 
     def to_dict(self) -> dict:
@@ -83,265 +82,250 @@ class DetalleProceso:
 
 
 # ════════════════════════════════════════════════════════════
-# 2. MAPEO DE ETIQUETAS DEL PORTAL → CAMPOS DEL DATACLASS
+# 2. MAPEO DE ETIQUETAS DEL PORTAL → CAMPOS
 # ════════════════════════════════════════════════════════════
 
-# El portal SECOP I muestra el detalle como pares etiqueta-valor.
-# Este mapeo vincula cada etiqueta (normalizada) con el atributo
-# correspondiente del dataclass.
-
+# Claves ya normalizadas por ``_normalizar_etiqueta`` (minúsculas, sin
+# signos, sin dobles espacios).
 _MAPEO_ETIQUETAS: dict[str, str] = {
-    # Etiqueta del portal (normalizada en minúsculas) → campo del dataclass
-    "número del proceso": "numero_proceso",
-    "numero del proceso": "numero_proceso",
-    "nro. proceso": "numero_proceso",
-    "proceso": "numero_proceso",
-    "entidad": "entidad",
-    "nombre entidad": "entidad",
-    "objeto del contrato": "objeto_contrato",
-    "objeto a contratar": "objeto_contrato",
-    "descripción": "objeto_contrato",
-    "modalidad de contratación": "modalidad",
+    # --- Información general del proceso ---
+    "tipo de proceso": "modalidad",
     "modalidad de contratacion": "modalidad",
-    "modalidad": "modalidad",
-    "fecha de apertura": "fecha_apertura",
-    "fecha apertura": "fecha_apertura",
-    "fecha de publicación": "fecha_apertura",
-    "fecha de cierre": "fecha_cierre",
-    "fecha cierre": "fecha_cierre",
-    "fecha de adjudicación": "fecha_adjudicacion",
-    "fecha adjudicación": "fecha_adjudicacion",
-    "fecha adjudicacion": "fecha_adjudicacion",
-    "valor estimado del contrato": "valor_estimado",
-    "valor estimado": "valor_estimado",
-    "cuantía": "valor_estimado",
-    "cuantia": "valor_estimado",
-    "presupuesto": "valor_estimado",
-    "valor del contrato": "valor_contrato",
-    "valor contrato": "valor_contrato",
-    "valor adjudicado": "valor_adjudicado",
-    "valor de adjudicación": "valor_adjudicado",
-    "proveedor adjudicado": "proveedor",
-    "contratista": "proveedor",
-    "proveedor": "proveedor",
-    "razón social": "proveedor",
-    "razon social": "proveedor",
-    "nit": "nit_proveedor",
-    "nit proveedor": "nit_proveedor",
-    "identificación del contratista": "nit_proveedor",
-    "departamento": "departamento",
-    "departamento entidad": "departamento",
-    "municipio": "municipio",
-    "ciudad": "municipio",
-    "ciudad entidad": "municipio",
-    "estado": "estado",
     "estado del proceso": "estado",
+    "detalle y cantidad del objeto a contratar": "objeto_contrato",
+    "objeto a contratar": "objeto_contrato",
+    "cuantia a contratar": "valor_estimado",
+    "presupuesto oficial": "valor_estimado",
+    "fecha y hora de apertura del proceso": "fecha_apertura",
+    "fecha de apertura del proceso": "fecha_apertura",
+    "fecha y hora de cierre del proceso": "fecha_cierre",
+    "fecha de cierre del proceso": "fecha_cierre",
+    # --- Datos del contrato ---
+    "numero del contrato": "numero_contrato",
+    "objeto del contrato": "objeto_contrato",
+    "estado del contrato": "estado_contrato",
+    "tipo de contrato": "tipo_contrato",
+    "cuantia definitiva del contrato": "valor_contrato",
+    "valor total del contrato": "valor_contrato",
+    "fecha de firma del contrato": "fecha_adjudicacion",
+    "fecha de adjudicacion": "fecha_adjudicacion",
+    "valor adjudicado": "valor_adjudicado",
+    # --- Contratista ---
+    "nombre o razon social del contratista": "proveedor",
+    "nombre del contratista": "proveedor",
+    "identificacion del contratista": "nit_proveedor",
+    # --- Ubicación ---
+    "departamento y municipio de ejecucion": "_ubicacion",
 }
 
 
 def _normalizar_etiqueta(texto: str) -> str:
-    """Normaliza una etiqueta del portal para búsqueda en el mapeo.
+    """Normaliza una etiqueta del portal para buscarla en el mapeo.
 
-    Minúsculas, sin espacios extra, sin caracteres especiales
-    excepto letras y espacios.
+    Pasa a minúsculas, quita tildes, signos de puntuación y espacios
+    redundantes, de modo que el mapeo no dependa de la acentuación ni de
+    los dos puntos finales.
     """
-    s = texto.lower().strip()
-    s = re.sub(r"[:\-–—]+$", "", s).strip()  # Quitar : al final
-    s = re.sub(r"[^a-záéíóúñü0-9\s]", "", s)
-    s = re.sub(r"\s+", " ", s)
-    return s.strip()
+    tabla = str.maketrans("áéíóúüñÁÉÍÓÚÜÑ", "aeiouunAEIOUUN")
+    s = texto.translate(tabla).lower().strip()
+    s = re.sub(r"[^a-z0-9\s]", " ", s)
+    return " ".join(s.split())
+
+
+def _partir_ubicacion(texto: str) -> tuple[str, str]:
+    """Separa ``"Santander : Albania"`` en departamento y municipio."""
+    if not texto:
+        return "", ""
+    if ":" in texto:
+        departamento, _, municipio = texto.partition(":")
+        return departamento.strip(), municipio.strip()
+    return texto.strip(), ""
+
+
+def _solo_fecha(texto: str) -> str:
+    """Extrae la fecha de cadenas como ``'24-03-2026 11:30 a.m.'``."""
+    coincidencia = _RE_FECHA.search(texto or "")
+    return coincidencia.group(1) if coincidencia else ""
+
+
+def _id_desde_url(url: str) -> str:
+    """Extrae el ``numConstancia`` de la URL de detalle."""
+    try:
+        return parse_qs(urlparse(url).query).get("numConstancia", [""])[0]
+    except (ValueError, AttributeError):
+        return ""
 
 
 # ════════════════════════════════════════════════════════════
-# 3. PARSEAR HTML DE DETALLE
+# 3. PARSEO DEL HTML DE DETALLE
 # ════════════════════════════════════════════════════════════
 
 
 def _parsear_detalle_html(html: str, url: str) -> DetalleProceso:
-    """Extrae todos los campos de la ficha de detalle de un proceso.
+    """Extrae los campos de la ficha de detalle de un proceso.
 
-    Busca pares etiqueta-valor en:
-      1. Filas ``<tr>`` con exactamente 2-3 ``<td>`` (etiqueta | valor).
-      2. Pares ``<dt>`` / ``<dd>`` (lista de definiciones).
-      3. ``<span>`` o ``<label>`` seguidos de un ``<span>`` o ``<div>``
-         con el valor.
+    Recorre las filas ``<tr>`` con al menos dos celdas, interpretándolas
+    como pares etiqueta-valor, y además rescata el número de proceso y
+    la entidad del encabezado de la página.
 
     Args:
-        html: HTML de la página de detalle.
-        url:  URL original (se almacena en el resultado).
+        html: HTML de la ficha de detalle.
+        url:  URL de origen (se guarda en el resultado).
 
     Returns:
-        Instancia de ``DetalleProceso`` con los campos poblados.
+        ``DetalleProceso`` con los campos encontrados.
     """
     soup = BeautifulSoup(html, "html.parser")
-    detalle = DetalleProceso(url_detalle=url)
+    detalle = DetalleProceso(url_detalle=url, id_proceso=_id_desde_url(url))
 
-    campos_encontrados: set[str] = set()
+    # --- Encabezado: número de proceso y entidad ---
+    texto_pagina = soup.get_text("\n", strip=True)
+    coincidencia = _RE_NUMERO_PROCESO.search(texto_pagina)
+    if coincidencia:
+        detalle.numero_proceso = coincidencia.group(1).strip()
 
-    # --- Estrategia 1: Filas <tr> con pares etiqueta-valor ---
-    for tr in soup.find_all("tr"):
-        tds = tr.find_all("td")
-        if len(tds) < 2:
+    lineas = [ln for ln in texto_pagina.split("\n") if ln.strip()]
+    for indice, linea in enumerate(lineas):
+        if _RE_NUMERO_PROCESO.search(linea) and indice + 1 < len(lineas):
+            detalle.entidad = lineas[indice + 1].strip()
+            break
+
+    # --- Pares etiqueta / valor ---
+    encontrados: set[str] = set()
+
+    for fila in soup.find_all("tr"):
+        celdas = fila.find_all("td")
+        if len(celdas) < 2:
             continue
 
-        etiqueta_raw = tds[0].get_text(strip=True)
-        valor_raw = tds[1].get_text(strip=True)
-
-        etiqueta_norm = _normalizar_etiqueta(etiqueta_raw)
-        campo = _MAPEO_ETIQUETAS.get(etiqueta_norm)
-
-        if campo and campo not in campos_encontrados:
-            setattr(detalle, campo, valor_raw)
-            campos_encontrados.add(campo)
-
-    # --- Estrategia 2: Listas de definición <dt>/<dd> ---
-    for dt in soup.find_all("dt"):
-        dd = dt.find_next_sibling("dd")
-        if not dd:
+        etiqueta = _normalizar_etiqueta(celdas[0].get_text(" ", strip=True))
+        valor = celdas[1].get_text(" ", strip=True)
+        if not etiqueta or not valor:
             continue
 
-        etiqueta_norm = _normalizar_etiqueta(dt.get_text(strip=True))
-        valor_raw = dd.get_text(strip=True)
-        campo = _MAPEO_ETIQUETAS.get(etiqueta_norm)
+        campo = _MAPEO_ETIQUETAS.get(etiqueta)
+        if not campo or campo in encontrados:
+            continue
 
-        if campo and campo not in campos_encontrados:
-            setattr(detalle, campo, valor_raw)
-            campos_encontrados.add(campo)
+        if campo == "_ubicacion":
+            detalle.departamento, detalle.municipio = _partir_ubicacion(valor)
+            encontrados.add(campo)
+            continue
 
-    # --- Estrategia 3: Labels + spans ---
-    for label in soup.find_all(["label", "span"]):
-        etiqueta_raw = label.get_text(strip=True)
-        etiqueta_norm = _normalizar_etiqueta(etiqueta_raw)
-        campo = _MAPEO_ETIQUETAS.get(etiqueta_norm)
+        if campo in ("fecha_apertura", "fecha_cierre", "fecha_adjudicacion"):
+            valor = _solo_fecha(valor)
+            if not valor:
+                continue
 
-        if campo and campo not in campos_encontrados:
-            # Buscar el siguiente elemento hermano que contenga el valor
-            siguiente = label.find_next_sibling(["span", "div", "p", "td"])
-            if siguiente:
-                valor_raw = siguiente.get_text(strip=True)
-                if valor_raw and valor_raw != etiqueta_raw:
-                    setattr(detalle, campo, valor_raw)
-                    campos_encontrados.add(campo)
+        setattr(detalle, campo, valor)
+        encontrados.add(campo)
 
     logger.debug(
-        "Detalle parseado para '%s': %d/%d campos encontrados.",
-        detalle.numero_proceso or url,
-        len(campos_encontrados),
-        len(COLUMNAS_DETALLE) - 1,  # -1 por url_detalle
+        "Detalle parseado para %r: %d campos.",
+        detalle.numero_proceso or url, len(encontrados),
     )
-
     return detalle
 
 
 # ════════════════════════════════════════════════════════════
-# 4. NAVEGAR Y EXTRAER DETALLE DE UN PROCESO
+# 4. DESCARGA DE UNA FICHA
 # ════════════════════════════════════════════════════════════
 
 
 def extraer_detalle_proceso(
-    driver: WebDriver,
     url: str,
-    timeout: int = DEFAULT_TIMEOUT,
+    sesion=None,
+    driver=None,
 ) -> Optional[DetalleProceso]:
-    """Navega a la URL de detalle de un proceso y extrae sus datos.
+    """Descarga y parsea la ficha de detalle de un proceso.
 
-    Incluye manejo de reintentos con backoff exponencial.
+    Usa HTTP directo salvo que se pase un ``driver``, en cuyo caso
+    navega con Selenium (útil si el WAF empieza a exigir JavaScript).
 
     Args:
-        driver:  WebDriver activo.
-        url:     URL absoluta del detalle del proceso.
-        timeout: Segundos máximos de espera de carga.
+        url:    URL absoluta de la ficha.
+        sesion: Sesión HTTP reutilizable.
+        driver: WebDriver a usar en lugar de HTTP.
 
     Returns:
-        ``DetalleProceso`` con los datos extraídos, o ``None`` si falla.
+        ``DetalleProceso``, o ``None`` si falla.
     """
-    for intento in range(1, MAX_RETRIES + 1):
-        try:
-            logger.debug("Navegando a detalle: %s (intento %d)", url, intento)
-            driver.get(url)
+    if driver is not None:
+        from selenium.common.exceptions import WebDriverException
 
-            # Esperar a que la página cargue (body visible)
-            WebDriverWait(driver, timeout).until(
-                EC.presence_of_element_located((By.TAG_NAME, "body"))
-            )
+        for intento in range(1, MAX_RETRIES + 1):
+            try:
+                driver.get(url)
+                return _parsear_detalle_html(driver.page_source, url)
+            except WebDriverException as exc:
+                logger.warning(
+                    "Error en detalle %s (intento %d/%d): %s",
+                    url, intento, MAX_RETRIES, exc,
+                )
+                if intento < MAX_RETRIES:
+                    time.sleep(RETRY_BACKOFF**intento)
+        return None
 
-            # Manejar posibles iframes en la página de detalle
-            driver.switch_to.default_content()
-            iframes = driver.find_elements(By.TAG_NAME, "iframe")
-            if iframes:
-                try:
-                    driver.switch_to.frame(iframes[0])
-                except WebDriverException:
-                    pass
+    from scraper import _get, crear_sesion
 
-            html = driver.page_source
-            detalle = _parsear_detalle_html(html, url)
-            return detalle
-
-        except TimeoutException:
-            espera = RETRY_BACKOFF ** intento
-            logger.warning(
-                "Timeout en detalle '%s' (intento %d/%d, espera %.1f s).",
-                url, intento, MAX_RETRIES, espera,
-            )
-            time.sleep(espera)
-
-        except WebDriverException as exc:
-            logger.error("Error WebDriver en detalle '%s': %s", url, exc)
-            if intento < MAX_RETRIES:
-                time.sleep(RETRY_BACKOFF ** intento)
-            else:
-                return None
-
-    logger.error("Agotados reintentos para detalle: %s", url)
-    return None
+    sesion = sesion or crear_sesion()
+    try:
+        respuesta = _get(sesion, url)
+        return _parsear_detalle_html(respuesta.text, url)
+    except Exception as exc:  # noqa: BLE001 - un fallo no debe parar el lote
+        logger.warning("No se pudo obtener el detalle %s: %s", url, exc)
+        return None
 
 
 # ════════════════════════════════════════════════════════════
-# 5. EXTRACCIÓN MASIVA DE DETALLES
+# 5. EXTRACCIÓN MASIVA
 # ════════════════════════════════════════════════════════════
 
 
 def extraer_detalles_masivo(
-    driver: WebDriver,
     urls: list[str],
-    delay: float = 1.5,
+    delay: float = HTTP_DELAY,
     max_errores: int = 10,
+    driver=None,
+    sesion=None,
 ) -> pd.DataFrame:
-    """Extrae detalles de múltiples procesos secuencialmente con rate limiting.
+    """Descarga las fichas de varios procesos, de forma secuencial.
 
     Args:
-        driver:       WebDriver activo.
-        urls:         Lista de URLs de detalle a procesar.
-        delay:        Segundos de espera entre cada proceso (rate limit).
-        max_errores:  Número máximo de errores consecutivos antes de abortar.
+        urls:        URLs de detalle a procesar.
+        delay:       Segundos entre peticiones (cortesía con el WAF).
+        max_errores: Errores consecutivos tolerados antes de abortar.
+        driver:      WebDriver opcional (fuerza la ruta Selenium).
+        sesion:      Sesión HTTP reutilizable.
 
     Returns:
-        DataFrame con los detalles de todos los procesos extraídos
-        exitosamente.
+        DataFrame con los detalles extraídos correctamente.
     """
+    from scraper import calentar_sesion, crear_sesion
+
+    if driver is None and sesion is None:
+        sesion = crear_sesion()
+        calentar_sesion(sesion)
+
     resultados: list[dict] = []
     errores_consecutivos = 0
     total = len(urls)
 
     logger.info("Iniciando extracción masiva de detalles: %d procesos.", total)
 
-    for idx, url in enumerate(urls, start=1):
-        logger.info("Proceso %d/%d: %s", idx, total, url)
+    for indice, url in enumerate(urls, start=1):
+        detalle = extraer_detalle_proceso(url, sesion=sesion, driver=driver)
 
-        detalle = extraer_detalle_proceso(driver, url)
-
-        if detalle:
+        if detalle and (detalle.numero_proceso or detalle.objeto_contrato):
             resultados.append(detalle.to_dict())
             errores_consecutivos = 0
         else:
             errores_consecutivos += 1
             logger.warning(
                 "Fallo en proceso %d/%d (errores consecutivos: %d).",
-                idx, total, errores_consecutivos,
+                indice, total, errores_consecutivos,
             )
 
-        # Abortar si hay demasiados errores seguidos
         if errores_consecutivos >= max_errores:
             logger.error(
                 "Abortando extracción masiva tras %d errores consecutivos.",
@@ -349,15 +333,13 @@ def extraer_detalles_masivo(
             )
             break
 
-        # Rate limiting (excepto en el último)
-        if idx < total:
+        if indice < total:
             time.sleep(delay)
 
-        # Progreso cada 10 procesos
-        if idx % 10 == 0:
+        if indice % 10 == 0:
             logger.info(
                 "Progreso: %d/%d procesados (%d exitosos).",
-                idx, total, len(resultados),
+                indice, total, len(resultados),
             )
 
     if not resultados:
@@ -366,21 +348,18 @@ def extraer_detalles_masivo(
 
     df = pd.DataFrame(resultados)
 
-    # Reordenar columnas según esquema canónico
-    cols_presentes = [c for c in COLUMNAS_DETALLE if c in df.columns]
-    cols_extra = [c for c in df.columns if c not in COLUMNAS_DETALLE]
-    df = df[cols_presentes + cols_extra]
+    presentes = [c for c in COLUMNAS_DETALLE if c in df.columns]
+    extras = [c for c in df.columns if c not in COLUMNAS_DETALLE]
+    df = df[presentes + extras]
 
     logger.info(
-        "Extracción masiva completada: %d/%d detalles extraídos.",
-        len(df), total,
+        "Extracción masiva completada: %d/%d detalles extraídos.", len(df), total
     )
-
     return df
 
 
 # ════════════════════════════════════════════════════════════
-# 6. CONSTRUIR BASE HISTÓRICA
+# 6. BASE HISTÓRICA INCREMENTAL
 # ════════════════════════════════════════════════════════════
 
 
@@ -391,17 +370,13 @@ def actualizar_base_historica(
 ) -> pd.DataFrame:
     """Combina nuevos registros con una base histórica existente.
 
-    Lógica:
-      1. Si el archivo histórico existe, lo carga.
-      2. Concatena los nuevos registros.
-      3. Elimina duplicados basándose en ``columna_clave``, conservando
-         el registro más reciente.
-      4. Guarda el resultado actualizado.
+    Deduplica por ``columna_clave`` conservando el registro más reciente.
+    El formato (CSV o Parquet) se decide por la extensión del archivo.
 
     Args:
-        nuevos:          DataFrame con registros nuevos.
-        ruta_historica:  Ruta del archivo CSV/Parquet de la base histórica.
-        columna_clave:   Columna usada como identificador único.
+        nuevos:         DataFrame con registros nuevos.
+        ruta_historica: Ruta del archivo histórico.
+        columna_clave:  Columna identificadora única.
 
     Returns:
         DataFrame con la base histórica actualizada.
@@ -410,7 +385,6 @@ def actualizar_base_historica(
 
     ruta = Path(ruta_historica)
 
-    # Cargar base existente
     if ruta.exists():
         if ruta.suffix == ".parquet":
             historica = pd.read_parquet(ruta)
@@ -421,24 +395,25 @@ def actualizar_base_historica(
         historica = pd.DataFrame()
         logger.info("No existe base histórica, se creará nueva.")
 
-    # Concatenar
     combinado = pd.concat([historica, nuevos], ignore_index=True)
 
-    # Deduplicar (conservar el último = más reciente)
     if columna_clave in combinado.columns:
         antes = len(combinado)
-        combinado.drop_duplicates(subset=[columna_clave], keep="last", inplace=True)
-        combinado.reset_index(drop=True, inplace=True)
+        combinado = combinado.drop_duplicates(
+            subset=[columna_clave], keep="last"
+        ).reset_index(drop=True)
         logger.info(
             "Deduplicación: %d → %d registros (clave: '%s').",
             antes, len(combinado), columna_clave,
         )
 
-    # Guardar
+    ruta.parent.mkdir(parents=True, exist_ok=True)
     if ruta.suffix == ".parquet":
         combinado.to_parquet(ruta, index=False, engine="pyarrow")
     else:
         combinado.to_csv(ruta, index=False, encoding="utf-8-sig")
 
-    logger.info("Base histórica actualizada en '%s': %d registros.", ruta, len(combinado))
+    logger.info(
+        "Base histórica actualizada en '%s': %d registros.", ruta, len(combinado)
+    )
     return combinado

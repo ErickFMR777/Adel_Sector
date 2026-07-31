@@ -234,6 +234,173 @@ for depto in departamentos:
     # ... parsear y guardar por departamento
 ```
 
+## El dashboard consulta en vivo
+
+`app.py` **no muestra un archivo viejo**: consulta los portales en el
+momento de la búsqueda. Se define el alcance en la barra lateral
+(portales, departamento, modalidad, estado, fechas) y se pulsa
+**🔎 Buscar en SECOP**.
+
+| | SECOP II (API) | SECOP I (portal) |
+|---|---|---|
+| Velocidad | segundos | ~4 s por página de 100 procesos |
+| Filtros | en el servidor, incluido el texto libre | en local sobre lo descargado |
+| Frescura | rezago de publicación de unos días | tiempo real |
+| Límite | ninguno relevante | `Páginas de SECOP I` en la barra lateral |
+
+Consultar los dos a la vez da la imagen más completa: SECOP II aporta el
+detalle de los contratos ya formalizados y SECOP I los procesos más
+recientes. La columna `fuente` indica de dónde viene cada fila.
+
+### Filtros disponibles
+
+Todos son desplegables, no campos de texto: se elige de una lista y la
+aplicación envía a cada portal el valor exacto que ese portal espera.
+Así no hay forma de fallar por una tilde o una mayúscula.
+
+| Filtro | Opciones | Alcance |
+|---|---|---|
+| Departamento | los 33 departamentos + **Todo el país** | ambos portales |
+| Modalidad | 27, anotadas si solo existen en un portal | ambos |
+| Tipo de contrato | 24 (Obra, Consultoría, Interventoría…) | solo SECOP II |
+| Estado | 19 | ambos |
+| Fechas, palabra clave | libres | ambos |
+
+La consulta **nacional** (sin departamento) da el panorama completo del
+país. Como son casi 6 millones de contratos, hay un tope configurable de
+descarga; si la consulta lo supera, la aplicación avisa cuántos
+coincidían en total para que puedas acotar.
+
+> Los dos portales no nombran igual las mismas cosas: la API llama
+> "Distrito Capital de Bogotá" a lo que SECOP I llama "Bogotá D.C.".
+> `catalogos.py` guarda esas equivalencias; por eso los filtros son
+> desplegables y no texto libre.
+
+**Por qué la consulta va con botón y no automática:** Streamlit reejecuta
+el script con cada interacción. Si la descarga colgara del flujo normal,
+mover un filtro dispararía una petición al portal y el WAF de
+contratos.gov.co bloquearía la IP en minutos. Por eso la descarga solo
+ocurre al pulsar el botón, hay una caché de 5 minutos por combinación de
+filtros, y los controles de "Refinar resultados" trabajan en local.
+
+El modo **Archivo CSV** sigue disponible en la barra lateral para abrir
+descargas previas sin tocar la red.
+
+## Estudio del Sector (Guía V3 de Colombia Compra Eficiente)
+
+La pestaña **📑 Estudio del Sector** genera el documento con la
+estructura del apartado 5.2 de la [Guía para la Elaboración de Estudios
+del Sector V3 (2025)](https://www.colombiacompra.gov.co/wp-content/uploads/2025/09/Guia-para-la-Elaboracion-de-Estudios-del-Sector-V3.pdf)
+de la ANCP–CCE, exportable a **Word** y **PDF**:
+
+| Numeral de la guía | Contenido generado |
+|---|---|
+| 5.2.1 Aspectos generales | Encabezado y contextos (guiados) |
+| 5.2.3 Gasto histórico — **demanda** | Modalidades, tipos de contrato, entidades, comportamiento anual y estacionalidad |
+| 5.2.4 Estudio de la **oferta** | Proveedores identificados y concentración del mercado |
+| 5.2.5 Estudio de **mercado** | Análisis de precios completo (ver abajo) |
+| 5.2.6 **Conclusiones** | Precio de referencia, rango, oferentes, modalidad predominante |
+
+El análisis estadístico sigue el apartado 8 de la guía: tendencia
+central, dispersión (incluido el coeficiente de variación), medidas de
+posición, **identificación de datos atípicos por rango intercuartílico**
+y **estadísticas descriptivas ajustadas**.
+
+Ese último punto no es un adorno. En una prueba real sobre 459 contratos
+de obra en Santander:
+
+```
+Media sin ajustar : $1.092.848.668
+Media ajustada    :   $180.556.942   ← tras excluir 59 atípicos (12,9 %)
+Coef. de variación: 396 %
+```
+
+Tomar el promedio simple habría inflado el precio de referencia seis
+veces. Por eso la guía exige el ajuste y por eso el documento propone
+como precio de referencia la media ajustada, dejando constancia del
+criterio.
+
+> Los apartados que dependen del criterio de la entidad —contexto
+> técnico y regulatorio, presupuesto oficial, requisitos habilitantes,
+> riesgos— se emiten señalados como *«Por completar por la Entidad
+> Estatal»*. No se inventan.
+
+## Despliegue del dashboard
+
+> **Vercel no sirve para esta aplicación.** Streamlit necesita un proceso
+> servidor de larga vida que mantiene una conexión WebSocket con cada
+> navegador; Vercel ejecuta funciones serverless de vida corta y sin
+> WebSockets persistentes. No existe una forma soportada de alojar
+> Streamlit ahí. Usa cualquiera de las opciones de abajo.
+
+### Opción A — Streamlit Community Cloud (recomendada, gratis)
+
+1. Sube el repositorio a GitHub.
+2. Entra en [share.streamlit.io](https://share.streamlit.io) → *New app*.
+3. Selecciona el repo, la rama y `app.py` como archivo principal.
+4. *Deploy*.
+
+El repositorio ya trae lo que necesita esa plataforma:
+
+| Archivo | Para qué |
+|---|---|
+| `requirements.txt` | dependencias de Python |
+| `packages.txt` | `fonts-dejavu-core`, necesario para exportar a PDF |
+| `.streamlit/config.toml` | tema oscuro y ajustes del servidor |
+
+Como `output/` está en `.gitignore`, la instancia arranca sin datos y
+muestra una pestaña **"Descargar de SECOP"** para traerlos desde la API
+en el momento. También puedes subir un CSV a mano.
+
+### Opción B — Contenedor (Render, Railway, Fly.io, HF Spaces, Cloud Run)
+
+```bash
+docker build -t adel-sector .
+docker run -p 8501:8501 adel-sector
+```
+
+La imagen instala `fonts-dejavu-core` y respeta la variable `PORT` que
+inyectan Render y Railway. En esos servicios basta con apuntar al
+`Dockerfile`; no hace falta configurar el comando de arranque.
+
+### Variables de entorno del dashboard
+
+| Variable | Efecto |
+|---|---|
+| `SECOP_CSV` | Ruta a un CSV concreto en vez de autodetectar el más reciente de `output/` |
+| `PDF_FONT_DIR` | Carpeta con `DejaVuSans.ttf` si el sistema no trae ninguna fuente TrueType |
+| `SOCRATA_APP_TOKEN` | Evita el *throttling* de la API al descargar desde la app |
+
+### Persistencia de los datos
+
+El sistema de archivos de Streamlit Cloud y de la mayoría de PaaS es
+**efímero**: los CSV descargados desde la app se pierden al reiniciar el
+contenedor. Para un panel que deba mantenerse actualizado sin
+intervención, las opciones son:
+
+- Programar `python main.py --fuente api ...` en una máquina propia y
+  publicar el CSV en un almacenamiento persistente (S3, un volumen), y
+  apuntar `SECOP_CSV` ahí.
+- O versionar un CSV base en el repositorio y usar el botón
+  *"Actualizar desde SECOP"* de la barra lateral cuando haga falta.
+
+## Verificación de las fuentes
+
+Los portales cambian sin avisar. El riesgo real no es que el scraper
+falle con estrépito —eso se nota— sino que siga corriendo y devuelva
+datos vacíos o sin filtrar. Para detectarlo:
+
+```bash
+python verificar_fuentes.py            # informe completo
+python verificar_fuentes.py --rapido   # solo la API (no toca SECOP I)
+```
+
+Comprueba que el formulario conserve sus campos, que los filtros se
+apliquen de verdad, que los códigos de modalidad y departamento sigan
+alineados con los del portal, y cuánto tiempo hace que se actualizó cada
+fuente. Devuelve código de salida 1 si algo se rompió, así que se puede
+programar en cron o en GitHub Actions.
+
 ## Licencia
 
 MIT

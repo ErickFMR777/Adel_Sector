@@ -1,18 +1,29 @@
 """
-parser.py — Extracción y estructuración de datos de las tablas HTML de SECOP I.
+parser.py — Estructuración de las tablas HTML de resultados de SECOP I.
 
 Responsabilidades:
-  1. Recibir HTML crudo (una o múltiples páginas) desde ``scraper.py``.
+  1. Recibir HTML crudo (una o varias páginas) desde ``scraper.py``.
   2. Localizar la tabla de resultados con BeautifulSoup.
-  3. Extraer encabezados y filas de la tabla.
-  4. Asignar nombres de columnas canónicos (``config.COLUMNAS_RESULTADO``).
-  5. Extraer URLs de detalle embebidas en los links de cada fila.
-  6. Consolidar múltiples páginas en un único DataFrame.
+  3. Mapear las columnas al esquema canónico de ``config``.
+  4. Derivar campos compuestos:
+       • ``id_proceso``  ← ``javascript: consultaProceso('26-11-14696064')``
+       • ``url_detalle`` ← ``detalleProceso.do?numConstancia=<id_proceso>``
+       • ``departamento`` / ``municipio`` ← ``"Santander : Girón"``
+       • ``fecha_apertura`` ← ``"Fecha de Celebración ... 31-03-2026"``
+  5. Consolidar múltiples páginas en un único DataFrame.
+
+Estructura real de la tabla (9 columnas, verificada en producción):
+
+    0 ∇ (ordinal)  1 Número de Proceso  2 Tipo de Proceso  3 Estado
+    4 Entidad      5 Objeto             6 Departamento y Municipio de Ejecución
+    7 Cuantía      8 Fecha(dd-mm-aaaa)
 
 Principios de diseño:
-  • Tolerancia a cambios menores en la estructura del DOM.
-  • Logging detallado de cada etapa de parsing.
-  • Nunca modifica tipos de datos — eso corresponde a ``cleaning.py``.
+  • Tolerancia a cambios menores del DOM: si la tabla no encaja con el
+    esquema conocido se cae a un parseo genérico por encabezados.
+  • **Nunca convierte tipos** — eso le corresponde a ``cleaning.py``.
+    Aquí ``cuantia`` sigue siendo ``'$255.000.000,00'`` y las fechas,
+    texto ``'31-03-2026'``.
 """
 
 from __future__ import annotations
@@ -20,208 +31,260 @@ from __future__ import annotations
 import logging
 import re
 from typing import Optional
-from urllib.parse import urljoin
 
 import pandas as pd
 from bs4 import BeautifulSoup, Tag
 
 from config import (
     COLUMNAS_RESULTADO,
-    SECOP_BASE_URL,
+    COLUMNAS_TABLA_SECOP1,
+    PATRON_ID_PROCESO,
+    SECOP_DETALLE_URL,
     SEL_TABLA_RESULTADOS,
-    SEL_TABLA_RESULTADOS_FALLBACK,
 )
 from exceptions import SecopEmptyTableError, SecopParsingError
 
 logger = logging.getLogger(__name__)
 
+_RE_ID_PROCESO = re.compile(PATRON_ID_PROCESO)
+_RE_FECHA = re.compile(r"(\d{1,2}[-/]\d{1,2}[-/]\d{4})")
+
+# Encabezados que identifican inequívocamente la tabla de resultados.
+_ENCABEZADOS_CLAVE = ("número de proceso", "numero de proceso")
+
 
 # ════════════════════════════════════════════════════════════
-# 1. LOCALIZAR TABLA EN EL HTML
+# 1. LOCALIZAR LA TABLA
 # ════════════════════════════════════════════════════════════
 
 
 def _encontrar_tabla(soup: BeautifulSoup) -> Optional[Tag]:
     """Localiza la tabla principal de resultados en el DOM.
 
-    Estrategia de búsqueda (de mayor a menor especificidad):
-      1. Clase CSS exacta del portal (``tbl_resulados``, sic).
-      2. Tabla con mayor número de filas (heurística).
-      3. Primera tabla del documento (último recurso).
+    Estrategia (de mayor a menor especificidad):
+      1. Tabla cuyo encabezado contiene "Número de Proceso".
+      2. Clase CSS histórica del portal (``tbl_resulados``, sic).
+      3. Tabla con mayor número de filas (heurística).
+      4. Primera tabla del documento (último recurso).
 
-    Args:
-        soup: Árbol BeautifulSoup del HTML.
-
-    Returns:
-        Elemento ``<table>`` encontrado, o ``None``.
+    En producción la tabla **no tiene clase CSS**, así que lo habitual es
+    que gane la estrategia 1.
     """
-    # Intento 1: clase CSS conocida del portal
-    # Nota: el portal usa "tbl_resulados" (un solo 't') — typo original.
+    tablas = soup.find_all("table")
+
+    # Estrategia 1: por encabezado real
+    for tabla in tablas:
+        primera = tabla.find("tr")
+        if not primera:
+            continue
+        texto = primera.get_text(" ", strip=True).lower()
+        if any(clave in texto for clave in _ENCABEZADOS_CLAVE):
+            logger.debug("Tabla localizada por encabezado 'Número de Proceso'.")
+            return tabla
+
+    # Estrategia 2: clase CSS histórica
     clase_css = SEL_TABLA_RESULTADOS.replace("table.", "")
     tabla = soup.find("table", class_=clase_css)
     if tabla:
-        logger.debug("Tabla encontrada por clase CSS '%s'.", clase_css)
+        logger.debug("Tabla localizada por clase CSS '%s'.", clase_css)
         return tabla
 
-    # Intento 2: tabla con más filas <tr>
-    tablas = soup.find_all("table")
+    # Estrategia 3: la tabla con más filas
     if tablas:
-        tabla_mayor = max(tablas, key=lambda t: len(t.find_all("tr")))
-        num_filas = len(tabla_mayor.find_all("tr"))
-        if num_filas > 1:
-            logger.debug(
-                "Tabla seleccionada por heurística (mayor filas: %d de %d tablas).",
-                num_filas,
-                len(tablas),
-            )
-            return tabla_mayor
+        mayor = max(tablas, key=lambda t: len(t.find_all("tr")))
+        if len(mayor.find_all("tr")) > 1:
+            logger.debug("Tabla localizada por heurística (mayor número de filas).")
+            return mayor
 
-    # Intento 3: primera tabla
-    tabla = soup.find("table")
-    if tabla:
-        logger.debug("Usando primera tabla del documento (fallback).")
-        return tabla
+    # Estrategia 4: la primera
+    return tablas[0] if tablas else None
 
+
+def _es_tabla_secop1(tabla: Tag) -> bool:
+    """Indica si la tabla tiene el esquema conocido de SECOP I."""
+    primera = tabla.find("tr")
+    if not primera:
+        return False
+    texto = primera.get_text(" ", strip=True).lower()
+    return any(clave in texto for clave in _ENCABEZADOS_CLAVE)
+
+
+# ════════════════════════════════════════════════════════════
+# 2. EXTRACCIÓN DE CAMPOS DERIVADOS
+# ════════════════════════════════════════════════════════════
+
+
+def _extraer_id_proceso(celda: Tag) -> Optional[str]:
+    """Extrae el identificador interno del proceso de una celda.
+
+    El enlace no es un ``href`` normal sino
+    ``javascript: consultaProceso('26-11-14696064')``.
+
+    Returns:
+        El ID (``'26-11-14696064'``) o ``None``.
+    """
+    for enlace in celda.find_all("a"):
+        for atributo in ("href", "onclick"):
+            valor = enlace.get(atributo) or ""
+            coincidencia = _RE_ID_PROCESO.search(valor)
+            if coincidencia:
+                return coincidencia.group(1).strip()
     return None
 
 
-# ════════════════════════════════════════════════════════════
-# 2. EXTRAER ENCABEZADOS
-# ════════════════════════════════════════════════════════════
-
-
-def _extraer_encabezados(tabla: Tag) -> list[str]:
-    """Extrae los encabezados de la tabla desde ``<th>`` o la primera fila ``<tr>``.
-
-    Normaliza cada encabezado: minúsculas, sin espacios dobles,
-    caracteres especiales reemplazados por ``_``.
+def _partir_ubicacion(texto: str) -> tuple[str, str]:
+    """Separa ``"Santander : San José de Miranda"`` en depto y municipio.
 
     Returns:
-        Lista de encabezados normalizados (puede estar vacía).
+        Tupla ``(departamento, municipio)``. Si no hay separador, todo el
+        texto se considera departamento.
+    """
+    if not texto:
+        return "", ""
+    if ":" in texto:
+        departamento, _, municipio = texto.partition(":")
+        return departamento.strip(), municipio.strip()
+    return texto.strip(), ""
+
+
+def _partir_fecha(texto: str) -> tuple[str, str]:
+    """Separa la etiqueta de la fecha en la última columna.
+
+    El portal escribe, por ejemplo,
+    ``"Fecha de Celebración del Primer Contrato 31-03-2026"``; la
+    etiqueta cambia según el estado del proceso.
+
+    Returns:
+        Tupla ``(etiqueta, fecha)`` con la fecha en texto (``dd-mm-yyyy``).
+    """
+    if not texto:
+        return "", ""
+    coincidencia = _RE_FECHA.search(texto)
+    if not coincidencia:
+        return texto.strip(), ""
+    fecha = coincidencia.group(1)
+    etiqueta = texto.replace(fecha, "").strip(" .-:")
+    return etiqueta, fecha
+
+
+def _url_detalle(id_proceso: Optional[str]) -> Optional[str]:
+    """Construye la URL de la ficha de detalle a partir del ID."""
+    if not id_proceso:
+        return None
+    return f"{SECOP_DETALLE_URL}?numConstancia={id_proceso}"
+
+
+# ════════════════════════════════════════════════════════════
+# 3. PARSEO DE UNA PÁGINA
+# ════════════════════════════════════════════════════════════
+
+
+def _parsear_filas_secop1(tabla: Tag) -> list[dict]:
+    """Convierte las filas de la tabla de SECOP I en diccionarios."""
+    registros: list[dict] = []
+    contenedor = tabla.find("tbody") or tabla
+
+    for fila in contenedor.find_all("tr"):
+        if fila.find("th") is not None:
+            continue  # fila de encabezado
+
+        celdas = fila.find_all("td")
+        if len(celdas) < len(COLUMNAS_TABLA_SECOP1):
+            continue  # separador o pie de paginación
+
+        crudo = {
+            nombre: celdas[indice].get_text(" ", strip=True)
+            for indice, nombre in COLUMNAS_TABLA_SECOP1.items()
+        }
+
+        # En las filas de datos la primera columna es el ordinal (1, 2, 3...);
+        # en el encabezado es el símbolo de ordenación "∇". Sirve para
+        # descartar el encabezado aunque esté maquetado con <td>.
+        if not crudo.get("orden", "").strip().isdigit():
+            continue
+
+        # Descartar filas sin número de proceso (decorativas)
+        if not crudo.get("numero_proceso"):
+            continue
+
+        id_proceso = _extraer_id_proceso(celdas[1])
+        departamento, municipio = _partir_ubicacion(crudo.pop("ubicacion_ejecucion", ""))
+        etiqueta, fecha = _partir_fecha(crudo.pop("fecha_texto", ""))
+        crudo.pop("orden", None)
+
+        crudo.update(
+            {
+                "id_proceso": id_proceso,
+                "departamento": departamento,
+                "municipio": municipio,
+                "fecha_etiqueta": etiqueta,
+                "fecha_apertura": fecha,
+                "url_detalle": _url_detalle(id_proceso),
+            }
+        )
+        registros.append(crudo)
+
+    return registros
+
+
+def _parsear_filas_generico(tabla: Tag) -> pd.DataFrame:
+    """Parseo de respaldo para tablas con un esquema desconocido.
+
+    Usa los ``<th>`` como nombres de columna (normalizados) y, si no los
+    hay, nombres genéricos ``col_0``, ``col_1``, ...
     """
     encabezados: list[str] = []
+    thead = tabla.find("thead") or tabla
+    ths = thead.find_all("th")
+    if ths:
+        for th in ths:
+            limpio = re.sub(r"[^a-záéíóúñü0-9]+", "_", th.get_text(strip=True).lower())
+            encabezados.append(re.sub(r"_+", "_", limpio).strip("_"))
 
-    # Intentar desde <thead> → <th>
-    thead = tabla.find("thead")
-    if thead:
-        ths = thead.find_all("th")
-        if ths:
-            encabezados = [th.get_text(strip=True) for th in ths]
-
-    # Fallback: primera fila <tr> con <th>
-    if not encabezados:
-        primera_fila = tabla.find("tr")
-        if primera_fila:
-            ths = primera_fila.find_all("th")
-            if ths:
-                encabezados = [th.get_text(strip=True) for th in ths]
-
-    # Normalizar
-    encabezados_norm = []
-    for h in encabezados:
-        h_clean = re.sub(r"[^a-záéíóúñü0-9]+", "_", h.lower().strip())
-        h_clean = re.sub(r"_+", "_", h_clean).strip("_")
-        encabezados_norm.append(h_clean)
-
-    logger.debug("Encabezados extraídos (%d): %s", len(encabezados_norm), encabezados_norm)
-    return encabezados_norm
-
-
-# ════════════════════════════════════════════════════════════
-# 3. EXTRAER FILAS DE DATOS
-# ════════════════════════════════════════════════════════════
-
-
-def _extraer_filas(tabla: Tag) -> list[list[str]]:
-    """Extrae todas las filas de datos (``<td>``) de la tabla.
-
-    Ignora filas que:
-      • Contienen solo ``<th>`` (encabezados).
-      • Están completamente vacías.
-      • Pertenecen al pie de paginación.
-
-    Returns:
-        Lista de listas de strings (una lista interna por fila).
-    """
     filas: list[list[str]] = []
-
-    # Buscar filas en <tbody>; si no existe, en toda la tabla
     contenedor = tabla.find("tbody") or tabla
-
-    for tr in contenedor.find_all("tr"):
-        celdas = tr.find_all("td")
+    for fila in contenedor.find_all("tr"):
+        celdas = fila.find_all("td")
         if not celdas:
             continue
-
-        fila = [td.get_text(strip=True) for td in celdas]
-
-        # Descartar filas dummy (todo vacío o solo espacios)
-        if all(c == "" for c in fila):
+        valores = [td.get_text(" ", strip=True) for td in celdas]
+        if all(v == "" for v in valores):
             continue
+        filas.append(valores)
 
-        filas.append(fila)
+    if not filas:
+        raise SecopParsingError(
+            "Tabla encontrada pero sin filas de datos.",
+            context={"encabezados": encabezados},
+        )
 
-    logger.debug("Filas de datos extraídas: %d", len(filas))
-    return filas
+    ancho = len(filas[0])
+    if len(encabezados) == ancho:
+        columnas = encabezados
+    else:
+        columnas = [f"col_{i}" for i in range(ancho)]
+        logger.warning(
+            "Esquema desconocido (%d columnas); se usan nombres genéricos.", ancho
+        )
 
-
-# ════════════════════════════════════════════════════════════
-# 4. EXTRAER URLs DE DETALLE DE CADA FILA
-# ════════════════════════════════════════════════════════════
-
-
-def _extraer_urls_detalle_html(tabla: Tag) -> list[Optional[str]]:
-    """Extrae la URL de detalle de proceso de cada fila de la tabla.
-
-    Busca el primer ``<a>`` con ``href`` que contenga ``detalleProceso``
-    dentro de cada ``<tr>``.
-
-    Returns:
-        Lista paralela a las filas con la URL de detalle (o ``None``).
-    """
-    urls: list[Optional[str]] = []
-    contenedor = tabla.find("tbody") or tabla
-
-    for tr in contenedor.find_all("tr"):
-        celdas = tr.find_all("td")
-        if not celdas:
-            continue
-
-        url_detalle: Optional[str] = None
-        for a in tr.find_all("a", href=True):
-            href = a["href"]
-            if "detalleProceso" in href or "detalle" in href.lower():
-                url_detalle = urljoin(SECOP_BASE_URL, href)
-                break
-
-        urls.append(url_detalle)
-
-    return urls
-
-
-# ════════════════════════════════════════════════════════════
-# 5. PARSEAR UNA SOLA PÁGINA HTML → DataFrame
-# ════════════════════════════════════════════════════════════
+    normalizadas = [
+        (fila + [""] * (ancho - len(fila)))[:ancho] for fila in filas
+    ]
+    return pd.DataFrame(normalizadas, columns=columnas)
 
 
 def parsear_pagina(html: str) -> pd.DataFrame:
     """Convierte el HTML de una página de resultados en un DataFrame.
 
-    Flujo:
-      1. Parsear HTML con BeautifulSoup.
-      2. Localizar la tabla.
-      3. Extraer encabezados y filas.
-      4. Asignar columnas canónicas o los encabezados del portal.
-      5. Añadir columna ``url_detalle`` con los links de cada fila.
-
     Args:
-        html: String HTML de una sola página de resultados.
+        html: HTML crudo de una página.
 
     Returns:
-        DataFrame con los datos crudos (sin limpiar ni tipificar).
+        DataFrame sin tipar, con el esquema de ``COLUMNAS_RESULTADO`` si
+        la tabla es la de SECOP I.
 
     Raises:
-        SecopParsingError: Si no se encuentra tabla o las filas están vacías.
+        SecopParsingError: Si no se encuentra tabla o no hay filas.
     """
     soup = BeautifulSoup(html, "html.parser")
     tabla = _encontrar_tabla(soup)
@@ -232,95 +295,59 @@ def parsear_pagina(html: str) -> pd.DataFrame:
             context={"html_length": len(html)},
         )
 
-    encabezados = _extraer_encabezados(tabla)
-    filas = _extraer_filas(tabla)
+    if not _es_tabla_secop1(tabla):
+        logger.debug("La tabla no tiene el esquema de SECOP I; parseo genérico.")
+        return _parsear_filas_generico(tabla)
 
-    if not filas:
+    registros = _parsear_filas_secop1(tabla)
+    if not registros:
         raise SecopParsingError(
-            "Tabla encontrada pero sin filas de datos.",
-            context={"encabezados": encabezados},
+            "Tabla de SECOP I encontrada pero sin filas de datos.",
+            context={"html_length": len(html)},
         )
 
-    # Determinar columnas
-    num_cols = len(filas[0])
-    if encabezados and len(encabezados) == num_cols:
-        columnas = encabezados
-    elif num_cols <= len(COLUMNAS_RESULTADO):
-        columnas = COLUMNAS_RESULTADO[:num_cols]
-    else:
-        columnas = [f"col_{i}" for i in range(num_cols)]
-        logger.warning(
-            "Número de columnas (%d) no coincide con ningún esquema conocido. "
-            "Usando nombres genéricos.",
-            num_cols,
-        )
+    df = pd.DataFrame(registros)
 
-    # Igualar longitud de filas (rellenar si faltan columnas)
-    filas_normalizadas = []
-    for fila in filas:
-        if len(fila) < num_cols:
-            fila.extend([""] * (num_cols - len(fila)))
-        elif len(fila) > num_cols:
-            fila = fila[:num_cols]
-        filas_normalizadas.append(fila)
-
-    df = pd.DataFrame(filas_normalizadas, columns=columnas)
-
-    # Añadir URLs de detalle
-    urls = _extraer_urls_detalle_html(tabla)
-    if urls and len(urls) == len(df):
-        df["url_detalle"] = urls
-    else:
-        df["url_detalle"] = None
-        logger.debug(
-            "URLs de detalle no mapeables (urls=%d, filas=%d).",
-            len(urls) if urls else 0,
-            len(df),
-        )
+    # Ordenar según el esquema canónico, conservando cualquier extra.
+    presentes = [c for c in COLUMNAS_RESULTADO if c in df.columns]
+    extras = [c for c in df.columns if c not in COLUMNAS_RESULTADO]
+    df = df[presentes + extras]
 
     logger.info("Página parseada: %d filas × %d columnas.", len(df), len(df.columns))
     return df
 
 
 # ════════════════════════════════════════════════════════════
-# 6. PARSEAR MÚLTIPLES PÁGINAS → DataFrame CONSOLIDADO
+# 4. PARSEO DE MÚLTIPLES PÁGINAS
 # ════════════════════════════════════════════════════════════
 
 
 def parsear_todas_paginas(paginas_html: list[str]) -> pd.DataFrame:
-    """Parsea una lista de HTMLs de páginas y consolida en un solo DataFrame.
+    """Parsea varias páginas y las consolida en un único DataFrame.
 
-    Cada página se parsea de forma independiente.  Las filas se concatenan
-    y se elimina el índice para obtener un rango continuo.
-
-    Si alguna página falla el parseo, se registra el error y se omite
-    (no detiene el pipeline).
+    Si una página falla, se registra y se omite sin detener el pipeline.
 
     Args:
-        paginas_html: Lista de strings HTML (uno por página).
+        paginas_html: Lista de HTML, uno por página.
 
     Returns:
-        DataFrame consolidado con **todas** las filas de **todas** las
-        páginas.
+        DataFrame consolidado con todas las filas.
 
     Raises:
-        SecopEmptyTableError: Si **ninguna** página produjo datos.
+        SecopEmptyTableError: Si ninguna página produjo datos.
     """
     if not paginas_html:
-        raise SecopEmptyTableError(
-            "No se recibieron páginas HTML para parsear.",
-        )
+        raise SecopEmptyTableError("No se recibieron páginas HTML para parsear.")
 
     dataframes: list[pd.DataFrame] = []
-    errores: int = 0
+    errores = 0
 
-    for idx, html in enumerate(paginas_html, start=1):
+    for indice, html in enumerate(paginas_html, start=1):
         try:
-            df_pagina = parsear_pagina(html)
-            dataframes.append(df_pagina)
+            dataframes.append(parsear_pagina(html))
         except SecopParsingError as exc:
             errores += 1
-            logger.warning("Página %d: error de parsing — %s", idx, exc)
+            logger.warning("Página %d: error de parsing — %s", indice, exc)
 
     if not dataframes:
         raise SecopEmptyTableError(
@@ -328,22 +355,15 @@ def parsear_todas_paginas(paginas_html: list[str]) -> pd.DataFrame:
             f"({errores} errores de parsing).",
         )
 
-    df_consolidado = pd.concat(dataframes, ignore_index=True)
+    consolidado = pd.concat(dataframes, ignore_index=True)
 
-    # Eliminar filas duplicadas exactas (pueden ocurrir en overlaps de paginación)
-    antes = len(df_consolidado)
-    df_consolidado.drop_duplicates(inplace=True)
-    df_consolidado.reset_index(drop=True, inplace=True)
-    despues = len(df_consolidado)
-
-    if antes != despues:
-        logger.info("Duplicados eliminados: %d → %d filas.", antes, despues)
+    antes = len(consolidado)
+    consolidado = consolidado.drop_duplicates().reset_index(drop=True)
+    if antes != len(consolidado):
+        logger.info("Duplicados eliminados: %d → %d filas.", antes, len(consolidado))
 
     logger.info(
-        "Parsing completado: %d filas totales de %d páginas (%d errores).",
-        len(df_consolidado),
-        len(paginas_html),
-        errores,
+        "Parsing completado: %d filas de %d páginas (%d errores).",
+        len(consolidado), len(paginas_html), errores,
     )
-
-    return df_consolidado
+    return consolidado

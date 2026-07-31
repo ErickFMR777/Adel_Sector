@@ -94,6 +94,24 @@ Ejemplos:
         default="busqueda",
         help="Modo de operación (default: busqueda).",
     )
+    parser.add_argument(
+        "--fuente",
+        choices=["auto", "secop1", "api"],
+        default="auto",
+        help=(
+            "Origen de los datos: 'secop1' raspa contratos.gov.co, 'api' usa "
+            "datos.gov.co (SECOP II), 'auto' intenta SECOP I y cae a la API "
+            "(default: auto)."
+        ),
+    )
+    parser.add_argument(
+        "--selenium",
+        action="store_true",
+        help=(
+            "Forzar el uso de Chrome para SECOP I. Por defecto se usa HTTP "
+            "directo, que es más rápido y no requiere navegador."
+        ),
+    )
 
     # --- Parámetros de búsqueda ---
     grupo_busqueda = parser.add_argument_group("Parámetros de búsqueda")
@@ -155,7 +173,31 @@ Ejemplos:
         "--estado",
         type=str,
         default=None,
-        help="Estado del proceso (texto visible del dropdown).",
+        help="Estado del proceso — ID o nombre (ej. '4' o 'Celebrado').",
+    )
+    grupo_busqueda.add_argument(
+        "--tipo-contrato",
+        type=str,
+        default=None,
+        help=(
+            "Tipo de contrato (solo API): 'Obra', 'Consultoría', "
+            "'Prestación de servicios'..."
+        ),
+    )
+    grupo_busqueda.add_argument(
+        "--cuantia",
+        type=str,
+        default=None,
+        help="Rango de cuantía — código del dropdown (ej. '1' = $0-$100M).",
+    )
+    grupo_busqueda.add_argument(
+        "--max-registros",
+        type=int,
+        default=None,
+        help=(
+            "Tope de registros a traer desde la API (default: todos los "
+            "que coincidan con el filtro)."
+        ),
     )
 
     # --- Paginación ---
@@ -226,6 +268,7 @@ def args_a_search_params(args: argparse.Namespace) -> SearchParams:
         departamento=args.departamento,
         municipio=args.municipio,
         estado=args.estado,
+        cuantia=args.cuantia,
         max_pages=args.max_paginas,
     )
 
@@ -263,71 +306,76 @@ def ejecutar_modo_busqueda(args: argparse.Namespace) -> int:
     """Ejecuta el pipeline completo en modo búsqueda.
 
     Flujo:
-      1. Intentar scraping con Selenium (SECOP I).
-      2. Si Selenium falla (403, timeout, WebDriver), usar API de
-         Datos Abiertos (SECOP II) como fallback automático.
+      1. Según ``--fuente``, raspar SECOP I (HTTP directo o Selenium)
+         y/o consultar la API de Datos Abiertos (SECOP II).
+      2. En modo ``auto``, si SECOP I falla o no devuelve nada, se cae
+         automáticamente a la API.
       3. Parsear / Limpiar / Exportar CSV.
 
     Returns:
         Código de salida (0 = éxito, 1 = error).
     """
-    from cleaning import limpiar_dataframe
+    from cleaning import filtrar_por_palabra_clave, limpiar_dataframe
 
     params = args_a_search_params(args)
     ruta_salida = generar_ruta_salida(args.salida, prefijo="secop_busqueda")
 
     logger.info("=" * 70)
-    logger.info("MODO BÚSQUEDA — Inicio del pipeline")
+    logger.info("MODO BÚSQUEDA — Inicio del pipeline (fuente=%s)", args.fuente)
     logger.info("Parámetros: %s", params)
     logger.info("=" * 70)
 
     df_limpio = None
+    error_secop1: Exception | None = None
 
-    # ── Intento 1: Selenium (SECOP I) ──
-    try:
-        from scraper import cerrar_driver, crear_driver, ejecutar_scraping
-        from parser import parsear_todas_paginas
-
-        logger.info("[Selenium] Intentando scraping con navegador...")
-        driver = crear_driver()
-
+    # ── Intento 1: SECOP I (contratos.gov.co) ──
+    if args.fuente in ("auto", "secop1"):
         try:
-            paginas_html, urls_detalle = ejecutar_scraping(
+            from scraper import ejecutar_scraping
+            from parser import parsear_todas_paginas
+
+            transporte = "Selenium" if args.selenium else "HTTP directo"
+            logger.info("[SECOP I] Extrayendo vía %s...", transporte)
+
+            paginas_html, _ = ejecutar_scraping(
                 params=params,
-                driver=driver,
-                cerrar_al_final=False,
+                usar_selenium=args.selenium,
             )
-            logger.info(
-                "Scraping completado: %d páginas, %d URLs de detalle.",
-                len(paginas_html), len(urls_detalle),
-            )
+            logger.info("[SECOP I] %d páginas descargadas.", len(paginas_html))
 
             df_crudo = parsear_todas_paginas(paginas_html)
-            logger.info("Parsing completado: %d filas crudas.", len(df_crudo))
+            logger.info("[SECOP I] Parsing completado: %d filas.", len(df_crudo))
+
+            # SECOP I no tiene búsqueda por texto libre: se filtra en local.
+            df_crudo = filtrar_por_palabra_clave(df_crudo, args.palabra_clave)
 
             df_limpio = limpiar_dataframe(df_crudo)
-            logger.info("Limpieza completada: %d filas limpias.", len(df_limpio))
+            logger.info("[SECOP I] Limpieza completada: %d filas.", len(df_limpio))
 
-        finally:
-            cerrar_driver(driver)
+        except Exception as exc:
+            error_secop1 = exc
+            logger.warning("[SECOP I] Falló la extracción: %s", exc)
+            if args.fuente == "secop1":
+                logger.exception("[SECOP I] Detalle del error.")
+                print(f"\nError extrayendo de SECOP I: {exc}")
+                return 1
+            logger.info("[API] Cambiando a datos.gov.co (SECOP II)...")
 
-    except Exception as exc_selenium:
-        logger.warning(
-            "[Selenium] Falló el scraping con navegador: %s", exc_selenium
-        )
-        logger.info("[API] Cambiando a API de Datos Abiertos (datos.gov.co)...")
-
-    # ── Intento 2: API de Datos Abiertos (fallback) ──
-    if df_limpio is None or df_limpio.empty:
+    # ── Intento 2: API de Datos Abiertos (SECOP II) ──
+    if (df_limpio is None or df_limpio.empty) and args.fuente in ("auto", "api"):
         try:
             from api_scraper import consultar_desde_params
 
             logger.info("[API] Consultando SECOP II vía datos.gov.co...")
-            df_api = consultar_desde_params(params)
+            df_api = consultar_desde_params(
+                params,
+                max_registros=args.max_registros,
+                tipo_contrato=args.tipo_contrato,
+            )
 
             if df_api.empty:
                 logger.warning("[API] La consulta no retornó registros.")
-                print("\n⚠️  Sin resultados en la API.")
+                print("\nSin resultados en la API.")
                 return 0
 
             df_limpio = limpiar_dataframe(df_api)
@@ -335,9 +383,16 @@ def ejecutar_modo_busqueda(args: argparse.Namespace) -> int:
 
         except Exception as exc_api:
             logger.exception("[API] Error en consulta API: %s", exc_api)
-            print(f"\n❌ Error: ni Selenium ni la API pudieron obtener datos.\n"
-                  f"  Selenium: {exc_selenium}\n  API: {exc_api}")
+            print("\nError: no se pudieron obtener datos.")
+            if error_secop1 is not None:
+                print(f"  SECOP I: {error_secop1}")
+            print(f"  API:     {exc_api}")
             return 1
+
+    if df_limpio is None or df_limpio.empty:
+        logger.warning("No se obtuvieron registros con los filtros dados.")
+        print("\nSin resultados para los filtros indicados.")
+        return 0
 
     # ── Exportación ──
     logger.info("Exportando resultados...")
@@ -391,7 +446,6 @@ def ejecutar_modo_detalle(args: argparse.Namespace) -> int:
     Returns:
         Código de salida (0 = éxito, 1 = error).
     """
-    from scraper import cerrar_driver, crear_driver
     from detail_scraper import extraer_detalles_masivo, actualizar_base_historica
     from cleaning import limpiar_dataframe
 
@@ -429,15 +483,18 @@ def ejecutar_modo_detalle(args: argparse.Namespace) -> int:
         print("⚠️  No hay URLs de detalle en el archivo.")
         return 0
 
-    driver = crear_driver()
+    driver = None
+    if args.selenium:
+        from scraper import crear_driver
+        driver = crear_driver()
 
     try:
         # --- Paso 1: Extracción masiva ---
         logger.info("[1/3] Extrayendo detalles de %d procesos...", len(urls))
         df_detalles = extraer_detalles_masivo(
-            driver=driver,
             urls=urls,
             delay=args.delay_detalle,
+            driver=driver,
         )
         logger.info("Extracción completada: %d detalles.", len(df_detalles))
 
@@ -491,7 +548,9 @@ def ejecutar_modo_detalle(args: argparse.Namespace) -> int:
         return 1
 
     finally:
-        cerrar_driver(driver)
+        if driver is not None:
+            from scraper import cerrar_driver
+            cerrar_driver(driver)
 
 
 # ════════════════════════════════════════════════════════════

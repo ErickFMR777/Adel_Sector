@@ -1,0 +1,24 @@
+.git
+.github
+.venv
+env
+venv
+ENV
+__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.vscode
+.idea
+
+# Datos y logs: se regeneran con el pipeline
+output/*.csv
+output/*.xlsx
+output/*.parquet
+logs/*.log
+logs/*.log.*
+
+.env
+.env.local
+secrets.json
+*.tmp

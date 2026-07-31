@@ -1,0 +1,25 @@
+# Configuración de Streamlit para el dashboard de Análisis del Sector.
+# Se aplica igual en local y en el despliegue.
+
+[theme]
+# El CSS de app.py está escrito para tema oscuro.
+base = "dark"
+primaryColor = "#3b82f6"
+backgroundColor = "#0e1117"
+secondaryBackgroundColor = "#161b22"
+textColor = "#e6edf3"
+
+[server]
+headless = true
+# Los CSV de contratos pueden pesar decenas de MB.
+maxUploadSize = 300
+# Protección CSRF activa. No poner enableCORS = false: es incompatible
+# con enableXsrfProtection y Streamlit lo revierte con una advertencia.
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+# En producción no conviene mostrar trazas de error al usuario final.
+showErrorDetails = false

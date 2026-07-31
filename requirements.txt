@@ -1,23 +1,29 @@
 # =========================================================
-# Pipeline SECOP I — Dependencias
+# Pipeline SECOP — Dependencias
 # =========================================================
 # Instalar con:  pip install -r requirements.txt
 # =========================================================
 
-# --- Web Scraping ---
-selenium>=4.15.0,<5.0.0
-webdriver-manager>=4.0.0,<5.0.0
+# --- HTTP (ruta principal de SECOP I y de la API) ---
+requests>=2.31.0
+
+# --- Web Scraping (ruta de respaldo con navegador) ---
+selenium>=4.15.0
+webdriver-manager>=4.0.0
 
 # --- Parsing HTML ---
-beautifulsoup4>=4.12.0,<5.0.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0                   # parser alternativo, más rápido
 
 # --- Datos ---
-pandas>=2.1.0,<3.0.0
-pyarrow>=14.0.0,<18.0.0       # Motor para Parquet
+# pandas 2.x no publica wheels para Python 3.13+/3.14; en esos
+# intérpretes pip resolverá pandas 3.x, con el que el código es
+# compatible (ver cleaning._columnas_texto).
+pandas>=2.1.0
+pyarrow>=14.0.0               # motor para Parquet
 
-# --- Utilidades (opcionales pero recomendadas) ---
-# lxml>=5.0.0                  # Parser alternativo para BeautifulSoup (más rápido)
-# openpyxl>=3.1.0              # Exportación a Excel .xlsx
-
-# --- Dashboard ---
-streamlit>=1.20.0,<2.0.0
+# --- Dashboard (app.py) ---
+streamlit>=1.50.0
+openpyxl>=3.1.0               # exportación a Excel
+fpdf2>=2.7.0                  # exportación a PDF
+python-docx>=1.1.0            # Estudio del Sector en Word
