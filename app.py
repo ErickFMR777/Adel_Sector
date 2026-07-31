@@ -593,6 +593,7 @@ div[data-baseweb="tab-list"] {
 
 # La normalización de esquemas vive en consulta.py, que es la que usan
 # tanto la consulta en vivo como la carga de archivos.
+from config import resolver_fuente_pdf  # noqa: E402
 from catalogos import (  # noqa: E402
     DEPARTAMENTOS,
     ESTADOS,
@@ -795,61 +796,16 @@ def _generar_informe_excel(contratos: pd.DataFrame) -> bytes:
     return buffer.getvalue()
 
 
-# Parejas (regular, negrita) de fuentes TrueType con soporte Unicode,
-# por orden de preferencia. Se necesita una TTF real porque las fuentes
-# internas de fpdf2 solo cubren Latin-1 y el informe lleva comillas
-# tipográficas y rayas largas.
-_FUENTES_PDF: list[tuple[str, str]] = [
-    # Linux (Debian/Ubuntu: contenedores y Streamlit Community Cloud)
-    ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
-    ("/usr/share/fonts/TTF/DejaVuSans.ttf",
-     "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf"),
-    # Windows
-    (r"C:\Windows\Fonts\arial.ttf", r"C:\Windows\Fonts\arialbd.ttf"),
-    (r"C:\Windows\Fonts\segoeui.ttf", r"C:\Windows\Fonts\segoeuib.ttf"),
-    (r"C:\Windows\Fonts\verdana.ttf", r"C:\Windows\Fonts\verdanab.ttf"),
-    # macOS
-    ("/System/Library/Fonts/Supplemental/Arial.ttf",
-     "/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
-    ("/Library/Fonts/Arial.ttf", "/Library/Fonts/Arial Bold.ttf"),
-]
-
-
-def _resolver_fuente_pdf() -> tuple[str, str] | None:
-    """Localiza una fuente TrueType Unicode disponible en el sistema.
-
-    La versión anterior fijaba la ruta de DejaVu en Linux, así que la
-    exportación a PDF fallaba en Windows y en cualquier imagen sin ese
-    paquete. Se puede forzar con la variable ``PDF_FONT_DIR``.
-
-    Returns:
-        Tupla ``(ruta_regular, ruta_negrita)``, o ``None`` si no hay
-        ninguna fuente utilizable.
-    """
-    dir_env = os.getenv("PDF_FONT_DIR")
-    candidatas = list(_FUENTES_PDF)
-    if dir_env:
-        candidatas.insert(0, (
-            str(Path(dir_env) / "DejaVuSans.ttf"),
-            str(Path(dir_env) / "DejaVuSans-Bold.ttf"),
-        ))
-
-    for regular, negrita in candidatas:
-        if Path(regular).exists():
-            # Si no hay negrita, se reutiliza la regular.
-            return regular, (negrita if Path(negrita).exists() else regular)
-
-    return None
-
-
+# La resolución de fuentes vive en config.py y la comparten este módulo
+# y estudio_sector.py. Mantener una copia aquí ya provocó que ambos
+# ficheros quedaran desincronizados.
 def hay_soporte_pdf() -> bool:
     """Indica si el entorno puede generar PDFs."""
     try:
         import fpdf  # noqa: F401
     except ImportError:
         return False
-    return _resolver_fuente_pdf() is not None
+    return resolver_fuente_pdf() is not None
 
 
 def _generar_informe_pdf(contratos: pd.DataFrame, palabras_busqueda: str = "") -> bytes:
@@ -860,7 +816,7 @@ def _generar_informe_pdf(contratos: pd.DataFrame, palabras_busqueda: str = "") -
     """
     from fpdf import FPDF
 
-    fuentes = _resolver_fuente_pdf()
+    fuentes = resolver_fuente_pdf()
     if fuentes is None:
         raise RuntimeError(
             "No se encontró una fuente TrueType para generar el PDF. "

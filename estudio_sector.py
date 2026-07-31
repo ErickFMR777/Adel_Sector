@@ -224,8 +224,23 @@ def analizar_demanda(df: pd.DataFrame) -> dict[str, Any]:
     }
 
     # Comportamiento temporal: detecta estacionalidad y concentración anual.
-    if "fecha_inicio" in df.columns:
-        fechas = pd.to_datetime(df["fecha_inicio"], errors="coerce")
+    # La columna de fecha se busca por orden de preferencia: el dashboard
+    # crea 'fecha_inicio' al tipar, pero al invocar este módulo con la
+    # salida cruda de consulta.py solo existe el nombre del esquema de la
+    # API. Sin este respaldo toda la sección temporal desaparecía en
+    # silencio, y la guía la exige expresamente (patrones y
+    # estacionalidad en la adquisición).
+    columna_fecha = next(
+        (c for c in ("fecha_inicio", "fecha_de_inicio_del_contrato",
+                     "fecha_de_firma", "fecha_apertura")
+         if c in df.columns and df[c].notna().any()),
+        None,
+    )
+
+    if columna_fecha:
+        fechas = pd.to_datetime(
+            df[columna_fecha], errors="coerce", format="mixed"
+        )
         validas = fechas.dropna()
         if not validas.empty:
             por_anio = (
