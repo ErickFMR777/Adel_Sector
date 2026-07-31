@@ -355,6 +355,84 @@ _MESES = [
     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 ]
 
+# Número de contratos que se detallan en el anexo. El documento lleva una
+# ficha por contrato, así que sin tope una consulta de 20.000 registros
+# tardaría minutos y pesaría decenas de MB.
+TOPE_ANEXO = 50
+
+
+def _url_proceso(valor: object) -> str:
+    """Extrae la URL del proceso del campo ``urlproceso``.
+
+    La API a veces entrega un diccionario serializado
+    (``{'url': 'https://...'}``) en lugar de la URL directa.
+    """
+    texto = str(valor or "").strip()
+    if not texto or texto.lower() == "nan":
+        return "N/D"
+    if texto.startswith("{") and "url" in texto:
+        import ast
+
+        try:
+            return str(ast.literal_eval(texto).get("url", texto))
+        except (ValueError, SyntaxError):
+            return texto
+    return texto
+
+
+def _plazo(fila: pd.Series) -> str:
+    """Calcula el plazo del contrato a partir de sus fechas."""
+    inicio = fila.get("fecha_inicio")
+    if pd.isna(inicio):
+        inicio = pd.to_datetime(
+            fila.get("fecha_de_inicio_del_contrato"), errors="coerce"
+        )
+    fin = fila.get("fecha_fin")
+    if pd.isna(fin):
+        fin = pd.to_datetime(
+            fila.get("fecha_de_fin_del_contrato"), errors="coerce"
+        )
+
+    if pd.isna(inicio) or pd.isna(fin):
+        return "N/D"
+
+    dias = (fin - inicio).days
+    if dias < 0:
+        return "N/D"
+    if dias >= 30:
+        meses = round(dias / 30)
+        return f"{meses} {'MES' if meses == 1 else 'MESES'} ({dias} días)"
+    return f"{dias} DÍAS"
+
+
+def filas_anexo(df: pd.DataFrame, tope: int = TOPE_ANEXO) -> list[dict[str, str]]:
+    """Prepara la relación de contratos de referencia para el anexo.
+
+    Se detallan los de mayor valor, que son los representativos para
+    sustentar el precio de referencia.
+    """
+    if df.empty:
+        return []
+
+    muestra = df.sort_values("valor_del_contrato", ascending=False).head(tope)
+
+    filas = []
+    for numero, (_, fila) in enumerate(muestra.iterrows(), 1):
+        entidad = str(fila.get("nombre_entidad", "N/D")).upper()
+        ciudad = str(fila.get("ciudad", "") or "").upper()
+        filas.append({
+            "n": str(numero),
+            "proceso": str(fila.get("proceso_de_compra", "N/D")),
+            "modalidad": str(fila.get("modalidad_de_contratacion", "N/D")).upper(),
+            "contratista": str(fila.get("proveedor_adjudicado", "N/D")).upper(),
+            "contratante": f"{entidad}, {ciudad}" if ciudad else entidad,
+            "objeto": str(fila.get("objeto_del_contrato", "N/D")).upper(),
+            "valor": cop(fila.get("valor_del_contrato")),
+            "plazo": _plazo(fila),
+            "enlace": _url_proceso(fila.get("urlproceso")),
+        })
+    return filas
+
 
 def _resumen_filtros(contexto: ContextoEstudio) -> str:
     """Describe en una línea los filtros que originaron la muestra."""
@@ -716,6 +794,45 @@ def exportar_docx(estudio: dict[str, Any]) -> bytes:
         + _POR_COMPLETAR
     )
     parrafo("h) Análisis de riesgos: " + _POR_COMPLETAR)
+
+    # ── Anexo: relación de contratos ──
+    anexo = filas_anexo(estudio["muestra"])
+    if anexo:
+        doc.add_page_break()
+        titulo("Anexo. Relación de contratos de referencia", 1)
+        parrafo(
+            "Se relacionan los contratos de mayor valor consultados en el "
+            "portal SECOP, que sustentan el análisis de precios de los "
+            "numerales anteriores."
+        )
+        if len(estudio["muestra"]) > len(anexo):
+            parrafo(
+                f"Se detallan {len(anexo)} de "
+                f"{len(estudio['muestra']):,} contratos analizados."
+                .replace(",", "."),
+                negrita=True,
+            )
+
+        for fila in anexo:
+            titulo(f"Contrato {fila['n']}", 3)
+            t = doc.add_table(rows=0, cols=2)
+            t.style = "Light Grid Accent 1"
+            for etiqueta, clave in (
+                ("No PROCESO SECOP", "proceso"),
+                ("MODALIDAD", "modalidad"),
+                ("CONTRATISTA", "contratista"),
+                ("CONTRATANTE", "contratante"),
+                ("OBJETO", "objeto"),
+                ("VALOR", "valor"),
+                ("PLAZO", "plazo"),
+                ("ENLACE", "enlace"),
+            ):
+                celdas = t.add_row().cells
+                celdas[0].text = etiqueta
+                for p in celdas[0].paragraphs:
+                    for r in p.runs:
+                        r.bold = True
+                celdas[1].text = fila[clave]
 
     # ── Ficha técnica ──
     doc.add_page_break()
@@ -1151,7 +1268,49 @@ def exportar_pdf(estudio: dict[str, Any]) -> bytes:
     texto("g) Requisitos habilitantes y criterios diferenciales: " + _POR_COMPLETAR)
     texto("h) Análisis de riesgos: " + _POR_COMPLETAR)
 
+    # ── Anexo: relación de contratos ──
+    anexo = filas_anexo(estudio["muestra"])
+    if anexo:
+        pdf.add_page()
+        h1("Anexo. Relación de contratos de referencia")
+        texto(
+            "Se relacionan los contratos de mayor valor consultados en el "
+            "portal SECOP, que sustentan el análisis de precios de los "
+            "numerales anteriores."
+        )
+        if len(estudio["muestra"]) > len(anexo):
+            texto(
+                f"Se detallan {len(anexo)} de "
+                f"{len(estudio['muestra']):,}".replace(",", ".")
+                + " contratos analizados.",
+                8.5,
+            )
+
+        for fila in anexo:
+            if pdf.get_y() > 215:
+                pdf.add_page()
+            pdf.ln(1)
+            pdf.set_fill_color(*AZUL)
+            pdf.set_text_color(255, 255, 255)
+            pdf.set_font(FUENTE, "B", 8.5)
+            pdf.cell(
+                0, 6, f"  CONTRATO {fila['n']}",
+                new_x="LMARGIN", new_y="NEXT", fill=True,
+            )
+            pdf.set_text_color(20, 20, 20)
+            ficha([
+                ("No PROCESO SECOP", fila["proceso"]),
+                ("MODALIDAD", fila["modalidad"]),
+                ("CONTRATISTA", fila["contratista"]),
+                ("CONTRATANTE", fila["contratante"]),
+                ("OBJETO", fila["objeto"]),
+                ("VALOR", fila["valor"]),
+                ("PLAZO", fila["plazo"]),
+                ("ENLACE", fila["enlace"]),
+            ], ancho_etiqueta=42)
+
     # ── Ficha técnica ──
+    pdf.add_page()
     h1("Ficha técnica de la consulta")
     ficha([
         ("Fuente de los datos", ", ".join(ctx.fuentes) or "SECOP"),

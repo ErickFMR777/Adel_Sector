@@ -300,6 +300,7 @@ de la ANCP–CCE, exportable a **Word** y **PDF**:
 | 5.2.4 Estudio de la **oferta** | Proveedores identificados y concentración del mercado |
 | 5.2.5 Estudio de **mercado** | Análisis de precios completo (ver abajo) |
 | 5.2.6 **Conclusiones** | Precio de referencia, rango, oferentes, modalidad predominante |
+| Anexo | Relación contrato por contrato (proceso, contratista, objeto, valor, plazo, enlace) |
 
 El análisis estadístico sigue el apartado 8 de la guía: tendencia
 central, dispersión (incluido el coeficiente de variación), medidas de
@@ -319,6 +320,11 @@ Tomar el promedio simple habría inflado el precio de referencia seis
 veces. Por eso la guía exige el ajuste y por eso el documento propone
 como precio de referencia la media ajustada, dejando constancia del
 criterio.
+
+El anexo detalla los 50 contratos de mayor valor: el documento lleva una
+ficha por contrato, y sin ese tope una consulta de 20.000 registros
+tardaría minutos y pesaría decenas de MB. El CSV de la pestaña de
+resultados sí incluye todos.
 
 > Los apartados que dependen del criterio de la entidad —contexto
 > técnico y regulatorio, presupuesto oficial, requisitos habilitantes,

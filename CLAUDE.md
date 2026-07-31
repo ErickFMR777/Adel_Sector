@@ -115,6 +115,7 @@ Reglas al tocarlo:
 Genera el **Estudio del Sector** con la estructura del apartado 5.2 de la *Guía para la Elaboración de Estudios del Sector V3 (2025)* de la ANCP–CCE, en Word (`python-docx`) y PDF (`fpdf2`).
 
 - La estadística sigue el **apartado 8** de la guía: atípicos por rango intercuartílico (`Q1 − 1,5·RIC`, `Q3 + 1,5·RIC`) y **estadísticas ajustadas** recalculadas sin ellos. No es opcional: en datos reales la media cruda salió 6× por encima de la ajustada, así que el precio de referencia se toma de la ajustada.
+- El **anexo** con la relación contrato por contrato (proceso, contratista, objeto, valor, plazo, enlace) sustituye a la antigua pestaña «Análisis de la Demanda», que duplicaba este contenido fuera del documento. Va acotado a `TOPE_ANEXO` fichas porque el informe lleva una por contrato: sin tope, 20.000 registros son minutos de generación y decenas de MB.
 - Solo se automatiza lo que **se deriva de SECOP**. Lo que exige criterio de la entidad (contexto técnico y regulatorio, presupuesto oficial, requisitos habilitantes, riesgos) se emite con el marcador `_POR_COMPLETAR`; no inventar contenido ahí.
 - El resolutor de fuentes TTF vive en `config.resolver_fuente_pdf()` y lo comparten `app.py` y este módulo — no duplicarlo.
 
